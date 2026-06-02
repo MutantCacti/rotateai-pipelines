@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
@@ -28,8 +29,8 @@ const unsigned char model_data[] = {
 #include "model_data.inc"
 };
 
-// Arena.
-constexpr int kArenaSize = 256 * 1024;
+// Arena. Sized for the new HART/Transformer model; bump if AllocateTensors fails.
+constexpr int kArenaSize = 1024 * 1024;
 alignas(16) uint8_t tensor_arena[kArenaSize];
 
 // Pipeline state returned by pipeline_init.
@@ -76,15 +77,18 @@ inline int pipeline_invoke(Pipeline* p) {
     return p->interpreter->Invoke() != kTfLiteOk;
 }
 
-// Z-score normalization.
+// Z-score normalization. No-op when means=={0,...} and stds=={1,...}.
 inline void normalize(float* sample, const float* means, const float* stds, int n) {
     for (int i = 0; i < n; i++)
         sample[i] = (sample[i] - means[i]) / stds[i];
 }
 
-inline void denormalize(float* sample, const float* means, const float* stds, int n) {
-    for (int i = 0; i < n; i++)
-        sample[i] = sample[i] * stds[i] + means[i];
+// Decode N (cos, sin) pairs into N angles via atan2.
+// raw layout: cos0, sin0, cos1, sin1, ...
+// angles: radians in (-pi, pi].
+inline void decode_angles(const float* raw, float* angles, int n_angles) {
+    for (int i = 0; i < n_angles; i++)
+        angles[i] = atan2f(raw[2*i + 1], raw[2*i]);
 }
 
 // Read one sample from stdin. Returns 1 on success, 0 on EOF.

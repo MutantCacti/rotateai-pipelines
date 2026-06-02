@@ -13,7 +13,6 @@ int main()
     Pipeline p = pipeline_init();
 
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
-    constexpr int kOutputSize = WINDOW_SIZE * OUTPUT_CHANNELS;
 
     float window[kInputSize] = {0};
     float sample[INPUT_CHANNELS];
@@ -34,13 +33,15 @@ int main()
             return 1;
         }
 
-        // Last row of output
-        float result[OUTPUT_CHANNELS];
-        memcpy(result, p.output + kOutputSize - OUTPUT_CHANNELS,
-               sizeof(float) * OUTPUT_CHANNELS);
-        denormalize(result, OUTPUT_MEANS, OUTPUT_STDS, OUTPUT_CHANNELS);
+        // Read raw (cos, sin) pairs from the last prediction row
+        float raw[OUTPUT_RAW_CHANNELS];
+        memcpy(raw, p.output + OUTPUT_LAST_ROW_OFFSET,
+               sizeof(float) * OUTPUT_RAW_CHANNELS);
 
-        write_output(result, OUTPUT_CHANNELS);
+        float angles[OUTPUT_CHANNELS];
+        decode_angles(raw, angles, OUTPUT_CHANNELS);
+
+        write_output(angles, OUTPUT_CHANNELS);
     }
 
     return 0;

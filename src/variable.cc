@@ -30,7 +30,7 @@ int main(int argc, const char *argv[])
 
     if (offset == 0) {
         print_usage();
-        fprintf(stderr, "Offset must be >= 1.")
+        fprintf(stderr, "Offset must be >= 1.");
         return 1;
     }
     
@@ -41,25 +41,24 @@ int main(int argc, const char *argv[])
     Pipeline p = pipeline_init();
 
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
-    constexpr int kOutputSize = WINDOW_SIZE * OUTPUT_CHANNELS;
 
     float window[kInputSize] = {0};
     float sample[INPUT_CHANNELS];
 
     int counter = 0;
 
-    while (read_sample(sample, INPUT_CHANNELS)) 
+    while (read_sample(sample, INPUT_CHANNELS))
     {
         // advance window
         normalize(sample, INPUT_MEANS, INPUT_STDS, INPUT_CHANNELS);
 
-        memmove(window, window + INPUT_CHANNELS, 
+        memmove(window, window + INPUT_CHANNELS,
             sizeof(float) * (kInputSize - INPUT_CHANNELS));
-        memcpy(window + kInputSize - INPUT_CHANNELS, sample, 
+        memcpy(window + kInputSize - INPUT_CHANNELS, sample,
             sizeof(float) * INPUT_CHANNELS);
-        
+
         // run inference if offset is reached
-        if (counter == 0) 
+        if (counter == 0)
         {
             counter = offset;
 
@@ -69,14 +68,16 @@ int main(int argc, const char *argv[])
                 return 1;
             }
 
-            float result[OUTPUT_CHANNELS];
-            memcpy(result, p.output + kOutputSize - OUTPUT_CHANNELS,
-                sizeof(float) * OUTPUT_CHANNELS);
-            denormalize(result, OUTPUT_MEANS, OUTPUT_STDS, OUTPUT_CHANNELS);
+            float raw[OUTPUT_RAW_CHANNELS];
+            memcpy(raw, p.output + OUTPUT_LAST_ROW_OFFSET,
+                sizeof(float) * OUTPUT_RAW_CHANNELS);
 
-            write_output(result, OUTPUT_CHANNELS);
-        } 
-        else 
+            float angles[OUTPUT_CHANNELS];
+            decode_angles(raw, angles, OUTPUT_CHANNELS);
+
+            write_output(angles, OUTPUT_CHANNELS);
+        }
+        else
         {
             counter--;
             write_skip();

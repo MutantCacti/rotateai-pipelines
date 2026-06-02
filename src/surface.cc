@@ -24,10 +24,9 @@ static void print_usage()
     fprintf(stderr, "Usage: surface --strategy STRAT --surface-depth DEPTH --dive-depth DEPTH [--min-samples INT]\n");
 }
 
-// Run inference on window, denormalize last row into result.
+// Run inference on window, return raw (cos, sin) pairs from the last prediction row.
 // Returns 0 on success, 1 on failure.
-static int infer(Pipeline* p, float* window, int kInputSize, int kOutputSize,
-                 float* result)
+static int infer(Pipeline* p, float* window, int kInputSize, float* raw)
 {
     memcpy(p->input, window, sizeof(float) * kInputSize);
     if (pipeline_invoke(p)) {
@@ -35,19 +34,20 @@ static int infer(Pipeline* p, float* window, int kInputSize, int kOutputSize,
         return 1;
     }
 
-    memcpy(result, p->output + kOutputSize - OUTPUT_CHANNELS,
-           sizeof(float) * OUTPUT_CHANNELS);
-    denormalize(result, OUTPUT_MEANS, OUTPUT_STDS, OUTPUT_CHANNELS);
+    memcpy(raw, p->output + OUTPUT_LAST_ROW_OFFSET,
+           sizeof(float) * OUTPUT_RAW_CHANNELS);
     return 0;
 }
 
-// Invoke model on current window, denormalize, and write output.
-static int infer_and_write(Pipeline* p, float* window, int kInputSize, int kOutputSize)
+// Invoke model on current window, decode raw pairs to angles, and write output.
+static int infer_and_write(Pipeline* p, float* window, int kInputSize)
 {
-    float result[OUTPUT_CHANNELS];
-    if (infer(p, window, kInputSize, kOutputSize, result))
+    float raw[OUTPUT_RAW_CHANNELS];
+    if (infer(p, window, kInputSize, raw))
         return 1;
-    write_output(result, OUTPUT_CHANNELS);
+    float angles[OUTPUT_CHANNELS];
+    decode_angles(raw, angles, OUTPUT_CHANNELS);
+    write_output(angles, OUTPUT_CHANNELS);
     return 0;
 }
 
@@ -64,7 +64,6 @@ static void advance_window(float* window, float* sample, int kInputSize)
 static int run_start(Pipeline* p, int surface_depth, int dive_depth, int min_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
-    constexpr int kOutputSize = WINDOW_SIZE * OUTPUT_CHANNELS;
 
     float window[kInputSize] = {0};
     float sample[INPUT_CHANNELS];
@@ -95,7 +94,7 @@ static int run_start(Pipeline* p, int surface_depth, int dive_depth, int min_sam
                 surfacing = false;
 
                 if (surface_count >= min_samples) {
-                    if (infer_and_write(p, window, kInputSize, kOutputSize))
+                    if (infer_and_write(p, window, kInputSize))
                         return 1;
                     continue;
                 }
@@ -112,7 +111,6 @@ static int run_start(Pipeline* p, int surface_depth, int dive_depth, int min_sam
 static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
-    constexpr int kOutputSize = WINDOW_SIZE * OUTPUT_CHANNELS;
 
     float window[kInputSize] = {0};
     float sample[INPUT_CHANNELS];
@@ -141,7 +139,7 @@ static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_sampl
                 surfacing = false;
 
                 if (surface_count >= min_samples) {
-                    if (infer_and_write(p, window, kInputSize, kOutputSize))
+                    if (infer_and_write(p, window, kInputSize))
                         return 1;
                     continue;
                 }
@@ -155,11 +153,11 @@ static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_sampl
 }
 
 // Strategy: bookend - average of start and end windows.
+// Average raw (cos, sin) pairs first, then atan2-decode (circular mean).
 static int run_bookend(Pipeline* p,
                        int surface_depth, int dive_depth, int min_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
-    constexpr int kOutputSize = WINDOW_SIZE * OUTPUT_CHANNELS;
 
     float start_window[kInputSize] = {0};
     float end_window[kInputSize] = {0};
@@ -193,18 +191,21 @@ static int run_bookend(Pipeline* p,
                 surfacing = false;
 
                 if (surface_count >= min_samples) {
-                    float result_start[OUTPUT_CHANNELS];
-                    float result_end[OUTPUT_CHANNELS];
-                    if (infer(p, start_window, kInputSize, kOutputSize, result_start))
+                    float raw_start[OUTPUT_RAW_CHANNELS];
+                    float raw_end[OUTPUT_RAW_CHANNELS];
+                    if (infer(p, start_window, kInputSize, raw_start))
                         return 1;
-                    if (infer(p, end_window, kInputSize, kOutputSize, result_end))
+                    if (infer(p, end_window, kInputSize, raw_end))
                         return 1;
 
-                    float averaged[OUTPUT_CHANNELS];
-                    for (int i = 0; i < OUTPUT_CHANNELS; i++)
-                        averaged[i] = (result_start[i] + result_end[i]) * 0.5f;
+                    float averaged[OUTPUT_RAW_CHANNELS];
+                    for (int i = 0; i < OUTPUT_RAW_CHANNELS; i++)
+                        averaged[i] = (raw_start[i] + raw_end[i]) * 0.5f;
 
-                    write_output(averaged, OUTPUT_CHANNELS);
+                    float angles[OUTPUT_CHANNELS];
+                    decode_angles(averaged, angles, OUTPUT_CHANNELS);
+
+                    write_output(angles, OUTPUT_CHANNELS);
                     continue;
                 }
             }
@@ -217,14 +218,14 @@ static int run_bookend(Pipeline* p,
 }
 
 // Strategy: average - average of non-overlapping windows across surfacing period.
+// Accumulate raw (cos, sin) pairs, then atan2-decode at the end (circular mean).
 static int run_average(Pipeline* p,
                        int surface_depth, int dive_depth, int min_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
-    constexpr int kOutputSize = WINDOW_SIZE * OUTPUT_CHANNELS;
 
     float window[kInputSize] = {0};
-    float accum[OUTPUT_CHANNELS] = {0};
+    float accum[OUTPUT_RAW_CHANNELS] = {0};
     float sample[INPUT_CHANNELS];
 
     bool surfacing = false;
@@ -251,13 +252,13 @@ static int run_average(Pipeline* p,
             surface_count++;
             window_pos++;
 
-            // Window full — run inference and accumulate
+            // Window full — run inference and accumulate raw pairs
             if (window_pos == WINDOW_SIZE) {
-                float result[OUTPUT_CHANNELS];
-                if (infer(p, window, kInputSize, kOutputSize, result))
+                float raw[OUTPUT_RAW_CHANNELS];
+                if (infer(p, window, kInputSize, raw))
                     return 1;
-                for (int i = 0; i < OUTPUT_CHANNELS; i++)
-                    accum[i] += result[i];
+                for (int i = 0; i < OUTPUT_RAW_CHANNELS; i++)
+                    accum[i] += raw[i];
                 window_count++;
                 window_pos = 0;
             }
@@ -267,11 +268,14 @@ static int run_average(Pipeline* p,
                 surfacing = false;
 
                 if (window_count > 0 && surface_count >= min_samples) {
-                    float averaged[OUTPUT_CHANNELS];
-                    for (int i = 0; i < OUTPUT_CHANNELS; i++)
+                    float averaged[OUTPUT_RAW_CHANNELS];
+                    for (int i = 0; i < OUTPUT_RAW_CHANNELS; i++)
                         averaged[i] = accum[i] / window_count;
 
-                    write_output(averaged, OUTPUT_CHANNELS);
+                    float angles[OUTPUT_CHANNELS];
+                    decode_angles(averaged, angles, OUTPUT_CHANNELS);
+
+                    write_output(angles, OUTPUT_CHANNELS);
                     continue;
                 }
             }

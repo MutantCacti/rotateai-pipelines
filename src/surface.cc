@@ -14,9 +14,10 @@
  *   - start    single window beginning with first sample of the surfacing
  *              period, emitted as soon as that window fills
  *   - end      single window ending with last sample of the surfacing period
- *   - bookend  average of the start and end window (outputted at the end)
+ *   - bookend  average of the start and end window (outputted at the end),
+ *              collapsing to the end window alone when the two would overlap
  *   - average  average of N windows tiled to cover the surfacing period
- *              (anchored to the end, start window overlaps pre-surface data)
+ *              (anchored to the start)
  *
  * Created: 2026-03-10
  * Authors: Maxence Morel Dierckx, Claude Opus 4.6, Claude Opus 5
@@ -163,7 +164,8 @@ static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_sampl
     return 0;
 }
 
-// Strategy: bookend - average of start and end windows.
+// Strategy: bookend - average of start and end windows, or the end window
+// alone when the surfacing period is too short to hold both.
 // Average raw (cos, sin) pairs first, then atan2-decode (circular mean).
 static int run_bookend(Pipeline* p,
                        int surface_depth, int dive_depth, int min_samples, int max_samples)
@@ -202,19 +204,22 @@ static int run_bookend(Pipeline* p,
                 surfacing = false;
 
                 if (surface_count >= min_samples) {
-                    float raw_start[OUTPUT_RAW_CHANNELS];
-                    float raw_end[OUTPUT_RAW_CHANNELS];
-                    if (infer(p, start_window, kInputSize, raw_start))
-                        return 1;
-                    if (infer(p, end_window, kInputSize, raw_end))
+                    float raw[OUTPUT_RAW_CHANNELS];
+                    if (infer(p, end_window, kInputSize, raw))
                         return 1;
 
-                    float averaged[OUTPUT_RAW_CHANNELS];
-                    for (int i = 0; i < OUTPUT_RAW_CHANNELS; i++)
-                        averaged[i] = (raw_start[i] + raw_end[i]) * 0.5f;
+                    // Below two windows' worth the two overlap, so the start
+                    // window holds no samples the end window does not.
+                    if (surface_count >= 2 * WINDOW_SIZE) {
+                        float raw_start[OUTPUT_RAW_CHANNELS];
+                        if (infer(p, start_window, kInputSize, raw_start))
+                            return 1;
+                        for (int i = 0; i < OUTPUT_RAW_CHANNELS; i++)
+                            raw[i] = (raw[i] + raw_start[i]) * 0.5f;
+                    }
 
                     float angles[OUTPUT_CHANNELS];
-                    decode_angles(averaged, angles, OUTPUT_CHANNELS);
+                    decode_angles(raw, angles, OUTPUT_CHANNELS);
 
                     write_output(angles, OUTPUT_CHANNELS);
                     continue;

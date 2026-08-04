@@ -7,14 +7,15 @@
  *   --surface-depth 2 --dive-depth 10 --min-samples 600
  *
  * Strategies:
- *   - start    single window beginning with first sample of the surfacing period
+ *   - start    single window beginning with first sample of the surfacing
+ *              period, emitted as soon as that window fills
  *   - end      single window ending with last sample of the surfacing period
  *   - bookend  average of the start and end window (outputted at the end)
  *   - average  average of N windows tiled to cover the surfacing period
  *              (anchored to the end, start window overlaps pre-surface data)
  *
  * Created: 2026-03-10
- * Authors: Maxence Morel Dierckx, Claude Opus 4.6
+ * Authors: Maxence Morel Dierckx, Claude Opus 4.6, Claude Opus 5
  */
 
 #include "pipeline.h"
@@ -60,8 +61,8 @@ static void advance_window(float* window, float* sample, int kInputSize)
            sizeof(float) * INPUT_CHANNELS);
 }
 
-// Strategy: start - freeze window after first WINDOW_SIZE surface samples.
-static int run_start(Pipeline* p, int surface_depth, int dive_depth, int min_samples)
+// Strategy: start - emit once the first WINDOW_SIZE surface samples are in.
+static int run_start(Pipeline* p, int surface_depth, int dive_depth)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
 
@@ -92,12 +93,12 @@ static int run_start(Pipeline* p, int surface_depth, int dive_depth, int min_sam
             if (depth > dive_depth) {
                 // Falling edge
                 surfacing = false;
+            }
 
-                if (surface_count >= min_samples) {
-                    if (infer_and_write(p, window, kInputSize))
-                        return 1;
-                    continue;
-                }
+            if (surface_count == WINDOW_SIZE) {
+                if (infer_and_write(p, window, kInputSize))
+                    return 1;
+                continue;
             }
         }
 
@@ -323,6 +324,12 @@ int main(int argc, const char *argv[])
         return 1;
     }
 
+    if (strcmp(strategy_str, "start") == 0 && min_samples >= 0 && min_samples != WINDOW_SIZE) {
+        print_usage();
+        fprintf(stderr, "Strategy start emits when the window fills; min samples is fixed at %d.\n", WINDOW_SIZE);
+        return 1;
+    }
+
     if (min_samples < 0) {
         min_samples = WINDOW_SIZE;
     }
@@ -330,7 +337,7 @@ int main(int argc, const char *argv[])
     Pipeline p = pipeline_init();
 
     if (strcmp(strategy_str, "start") == 0)
-        return run_start(&p, surface_depth, dive_depth, min_samples);
+        return run_start(&p, surface_depth, dive_depth);
     else if (strcmp(strategy_str, "end") == 0)
         return run_end(&p, surface_depth, dive_depth, min_samples);
     else if (strcmp(strategy_str, "bookend") == 0)

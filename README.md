@@ -59,4 +59,4 @@ make surface
 | `variable` | Every X samples | Measures a sample window periodically. |
 | `surface`  | Event-triggered | Detects surfacing periods and runs inference on them. |
 
-The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly.
+The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly. `start` emits as soon as its window fills rather than waiting for the dive, so `--min-samples` is fixed at the window size for that strategy.

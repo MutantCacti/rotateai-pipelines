@@ -60,3 +60,5 @@ make surface
 | `surface`  | Event-triggered | Detects surfacing periods and runs inference on them. |
 
 The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly. `start` emits as soon as its window fills rather than waiting for the dive, so `--min-samples` is fixed at the window size for that strategy.
+
+`--max-samples` ends a surfacing period after N samples even without a dive. On deployments that never pass `--dive-depth` a period would otherwise never close and nothing would ever be emitted; forcing it shut gives a `variable`-style refresh every N samples. It defaults to 0 (no maximum) and must be at least the window size.

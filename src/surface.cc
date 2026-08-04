@@ -4,7 +4,11 @@
  * on them with four possible strategies.
  *
  * Usage: surface --strategy start/end/bookend/average \
- *   --surface-depth 2 --dive-depth 10 --min-samples 600
+ *   --surface-depth 2 --dive-depth 10 --min-samples 600 --max-samples 3000
+ *
+ * --max-samples ends a surfacing period after N samples even without a dive,
+ * giving a variable-style refresh on deployments that never pass dive-depth.
+ * 0 disables it.
  *
  * Strategies:
  *   - start    single window beginning with first sample of the surfacing
@@ -22,7 +26,7 @@
 
 static void print_usage()
 {
-    fprintf(stderr, "Usage: surface --strategy STRAT --surface-depth DEPTH --dive-depth DEPTH [--min-samples INT]\n");
+    fprintf(stderr, "Usage: surface --strategy STRAT --surface-depth DEPTH --dive-depth DEPTH [--min-samples INT] [--max-samples INT]\n");
 }
 
 // Run inference on window, return raw (cos, sin) pairs from the last prediction row.
@@ -61,8 +65,14 @@ static void advance_window(float* window, float* sample, int kInputSize)
            sizeof(float) * INPUT_CHANNELS);
 }
 
+// Surfacing ends on a dive, or on a forced refresh once max_samples is reached.
+static bool surfacing_ended(float depth, int dive_depth, int surface_count, int max_samples)
+{
+    return depth > dive_depth || (max_samples > 0 && surface_count >= max_samples);
+}
+
 // Strategy: start - emit once the first WINDOW_SIZE surface samples are in.
-static int run_start(Pipeline* p, int surface_depth, int dive_depth)
+static int run_start(Pipeline* p, int surface_depth, int dive_depth, int max_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
 
@@ -90,7 +100,7 @@ static int run_start(Pipeline* p, int surface_depth, int dive_depth)
             }
             surface_count++;
 
-            if (depth > dive_depth) {
+            if (surfacing_ended(depth, dive_depth, surface_count, max_samples)) {
                 // Falling edge
                 surfacing = false;
             }
@@ -109,7 +119,7 @@ static int run_start(Pipeline* p, int surface_depth, int dive_depth)
 }
 
 // Strategy: end - keep advancing window until falling edge.
-static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_samples)
+static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_samples, int max_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
 
@@ -135,7 +145,7 @@ static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_sampl
             advance_window(window, sample, kInputSize);
             surface_count++;
 
-            if (depth > dive_depth) {
+            if (surfacing_ended(depth, dive_depth, surface_count, max_samples)) {
                 // Falling edge
                 surfacing = false;
 
@@ -156,7 +166,7 @@ static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_sampl
 // Strategy: bookend - average of start and end windows.
 // Average raw (cos, sin) pairs first, then atan2-decode (circular mean).
 static int run_bookend(Pipeline* p,
-                       int surface_depth, int dive_depth, int min_samples)
+                       int surface_depth, int dive_depth, int min_samples, int max_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
 
@@ -187,7 +197,7 @@ static int run_bookend(Pipeline* p,
             advance_window(end_window, sample, kInputSize);
             surface_count++;
 
-            if (depth > dive_depth) {
+            if (surfacing_ended(depth, dive_depth, surface_count, max_samples)) {
                 // Falling edge
                 surfacing = false;
 
@@ -221,7 +231,7 @@ static int run_bookend(Pipeline* p,
 // Strategy: average - average of non-overlapping windows across surfacing period.
 // Accumulate raw (cos, sin) pairs, then atan2-decode at the end (circular mean).
 static int run_average(Pipeline* p,
-                       int surface_depth, int dive_depth, int min_samples)
+                       int surface_depth, int dive_depth, int min_samples, int max_samples)
 {
     constexpr int kInputSize = WINDOW_SIZE * INPUT_CHANNELS;
 
@@ -264,7 +274,7 @@ static int run_average(Pipeline* p,
                 window_pos = 0;
             }
 
-            if (depth > dive_depth) {
+            if (surfacing_ended(depth, dive_depth, surface_count, max_samples)) {
                 // Falling edge
                 surfacing = false;
 
@@ -294,6 +304,7 @@ int main(int argc, const char *argv[])
     int surface_depth = 0;
     int dive_depth = -1;
     int min_samples = -1;
+    int max_samples = 0;
 
     // Parse args
     for (int i = 1; i < argc; i++) {
@@ -305,6 +316,8 @@ int main(int argc, const char *argv[])
             dive_depth = atoi(argv[++i]);
         } else if ((strcmp(argv[i], "--min-samples") == 0 || strcmp(argv[i], "-m") == 0) && i + 1 < argc) {
             min_samples = atoi(argv[++i]);
+        } else if ((strcmp(argv[i], "--max-samples") == 0 || strcmp(argv[i], "-x") == 0) && i + 1 < argc) {
+            max_samples = atoi(argv[++i]);
         } else {
             print_usage();
             return 1;
@@ -334,14 +347,20 @@ int main(int argc, const char *argv[])
         min_samples = WINDOW_SIZE;
     }
 
+    if (max_samples != 0 && max_samples < WINDOW_SIZE) {
+        print_usage();
+        fprintf(stderr, "Max samples must be 0 (no maximum) or >= window size (%d).\n", WINDOW_SIZE);
+        return 1;
+    }
+
     Pipeline p = pipeline_init();
 
     if (strcmp(strategy_str, "start") == 0)
-        return run_start(&p, surface_depth, dive_depth);
+        return run_start(&p, surface_depth, dive_depth, max_samples);
     else if (strcmp(strategy_str, "end") == 0)
-        return run_end(&p, surface_depth, dive_depth, min_samples);
+        return run_end(&p, surface_depth, dive_depth, min_samples, max_samples);
     else if (strcmp(strategy_str, "bookend") == 0)
-        return run_bookend(&p, surface_depth, dive_depth, min_samples);
+        return run_bookend(&p, surface_depth, dive_depth, min_samples, max_samples);
     else
-        return run_average(&p, surface_depth, dive_depth, min_samples);
+        return run_average(&p, surface_depth, dive_depth, min_samples, max_samples);
 }

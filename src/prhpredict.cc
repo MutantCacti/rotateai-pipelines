@@ -6,7 +6,7 @@
  * Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]
  *                   [--descent-samples N] [--min-breath N] [--log-samples N]
  *                   [--ascent-samples N] [--ascent-blocks N] [--min-ascent N]
- *                   [--min-aniso X] [--min-aniso-up X]
+ *                   [--min-aniso X] [--min-aniso-up X] [--no-ascents]
  *
  * Compile-time switches, all off by default:
  *   -DSINGLE_PRECISION  all arithmetic in float instead of double
@@ -76,6 +76,7 @@ static int MIN_ASCENT      = 25;    // 5 s
 // whole blocks.
 #define MAX_BLOCKS 8
 static int ASCENT_BLOCKS = 4;
+static int ASCENTS = 1;             // --no-ascents: never wake for one
 
 
 // Minimum contrast (max - min) / (max + min) of the lateral-energy curve in h.
@@ -302,7 +303,7 @@ static void usage(void)
         "Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]\n"
         "                  [--descent-samples N] [--min-breath N] [--log-samples N]\n"
         "                  [--ascent-samples N] [--ascent-blocks N] [--min-ascent N]\n"
-        "                  [--min-aniso X] [--min-aniso-up X]\n"
+        "                  [--min-aniso X] [--min-aniso-up X] [--no-ascents]\n"
         "Defaults: %s\n", defaults);
 }
 
@@ -312,7 +313,7 @@ int main(int argc, const char *argv[])
     snprintf(defaults, sizeof(defaults),
              "surface %g m, breath %g m, dive %g m, descent %d, min-breath %d, "
              "log-samples %d, ascent-samples %d, ascent-blocks %d, min-ascent %d, "
-             "min-aniso %g, min-aniso-up %g",
+             "min-aniso %g, min-aniso-up %g, ascents on",
              (double)SURFACE_DEPTH, (double)BREATH_DEPTH, (double)DIVE_DEPTH,
              DESCENT_SAMPLES, MIN_BREATH, LOG_SAMPLES, ASCENT_SAMPLES, ASCENT_BLOCKS,
              MIN_ASCENT, (double)MIN_ANISO, (double)MIN_ANISO_UP);
@@ -330,6 +331,7 @@ int main(int argc, const char *argv[])
         else if (has && !strcmp(a, "--ascent-blocks"))   ASCENT_BLOCKS   = atoi(argv[++i]);
         else if (has && !strcmp(a, "--min-ascent"))      MIN_ASCENT      = atoi(argv[++i]);
         else if (has && !strcmp(a, "--min-aniso-up"))    MIN_ANISO_UP    = R(atof(argv[++i]));
+        else if (!strcmp(a, "--no-ascents"))             ASCENTS         = 0;
         else if (has && !strcmp(a, "--min-aniso"))       MIN_ANISO       = R(atof(argv[++i]));
         else { usage(); return 1; }
     }
@@ -349,6 +351,12 @@ int main(int argc, const char *argv[])
     memset(&s, 0, sizeof(s));
     logging_reset(&s);
     s.st = ST_DIVE;
+
+    // Same key and format the TFLite pipelines use for their tensor arena
+    // (pipeline.h), so the simulator reports memory for this pipeline too.
+    // State is the whole working set: there is no heap allocation here, and
+    // the ascent ring is a fixed MAX_BLOCKS array.
+    fprintf(stderr, "arena_used_bytes:%zu\n", sizeof(State));
 
     float sample[N_INPUT];
     while (read_sample(sample, N_INPUT)) {
@@ -415,7 +423,8 @@ int main(int argc, const char *argv[])
             if (s.descent.n >= DESCENT_SAMPLES) {
                 wrote = emit(&s, &s.descent, "down", MIN_ANISO);
                 logging_reset(&s);
-                s.wake_depth = depth > DIVE_DEPTH ? depth : DIVE_DEPTH;
+                // A wake depth of 0 leaves ST_ASCENT unreachable
+                s.wake_depth = !ASCENTS ? 0.0f : depth > DIVE_DEPTH ? depth : DIVE_DEPTH;
                 s.st = ST_DIVE;
             }
         }

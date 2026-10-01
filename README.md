@@ -49,7 +49,10 @@ Generated files (default: `build/models/`):
 make baseline
 make variable
 make surface
+make prhpredict
 ```
+
+`prhpredict` has no model, so it needs neither TFLite Micro nor model preparation — just a C++ compiler.
 
 ## Current Pipelines
 
@@ -58,6 +61,7 @@ make surface
 | `baseline` | Every sample | Maximum accuracy and cost. |
 | `variable` | Every X samples | Measures a sample window periodically. |
 | `surface`  | Event-triggered | Detects surfacing periods and runs inference on them. |
+| `prhpredict` | Event-triggered, no model | Mark Johnson's prhpredictor method 1. Get pitch and roll from the mean acceleration while breathing at the surface, heading from the assumption of planarity in pitch on descent. |
 
 The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly. `start` emits as soon as its window fills rather than waiting for the dive, so `--min-samples` is fixed at the window size for that strategy. `bookend` falls back to the end window alone when the surfacing period is shorter than two windows.
 

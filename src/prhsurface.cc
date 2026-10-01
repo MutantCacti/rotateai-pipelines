@@ -58,9 +58,11 @@ static float EMIT_DEPTH    = -1.0f;
 
 
 // Sample counts assume 5 Hz.
-static int MIN_BREATH      = 25;    // 5 s
+static int MIN_BREATH      = 50;    // 10 s
 static int BLOCK_SAMPLES   = 25;    // 5 s
-static int REFRESH_SAMPLES = 0;     // emit every N surfacing samples; 0: only on leaving
+// Emit every N samples of an unbroken surfacing, so an animal that never dives
+// still gets corrections. 12 min only reaches surfacings that long; 0: off.
+static int REFRESH_SAMPLES = 3600;
 
 
 // Windows are the newest N blocks of the surfacing; 0 is the whole surfacing.
@@ -71,7 +73,7 @@ static int LOG_BLOCKS     = 0;
 static int HEADING_BLOCKS = 0;
 
 
-static real MIN_ANISO = R(0.67);
+static real MIN_ANISO = R(0.6);
 
 
 enum { ST_DIVE = 0, ST_SHALLOW, ST_BREATH };

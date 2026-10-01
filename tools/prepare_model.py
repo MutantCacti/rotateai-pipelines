@@ -31,12 +31,15 @@ import pickle
 import re
 import sys
 
+
 import numpy as np
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
 
 # Vendored custom Keras layers (HART / Transformer family)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import model.Transformer_model  # noqa: F401  registers @register_keras_serializable classes
+
 
 import tensorflow as tf
 from tensorflow.lite.tools import visualize

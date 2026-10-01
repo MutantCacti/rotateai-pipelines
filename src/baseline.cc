@@ -8,7 +8,8 @@
 
 #include "pipeline.h"
 
-int main() 
+
+int main()
 {
     Pipeline p = pipeline_init();
 

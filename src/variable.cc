@@ -9,15 +9,17 @@
 
 #include "pipeline.h"
 
+
 static void print_usage()
 {
     fprintf(stderr, "Usage: variable --offset X");
 }
 
+
 int main(int argc, const char *argv[]) 
 {
     int offset = -1;
-    
+
     // Parse offset
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "--offset") == 0 || strcmp(argv[i], "-o") == 0) && i + 1 < argc) {
@@ -33,7 +35,7 @@ int main(int argc, const char *argv[])
         fprintf(stderr, "Offset must be >= 1.");
         return 1;
     }
-    
+
     // offset of 2 means a gap of 1
     offset--;
 

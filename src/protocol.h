@@ -14,6 +14,16 @@
 #include <cstdint>
 
 
+// Windows opens stdio in text mode, where byte 0x1A ends the input stream
+// and newline bytes are rewritten. Switch both to binary before main runs.
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+[[maybe_unused]] static const int stdio_binary =
+    _setmode(_fileno(stdin), _O_BINARY) | _setmode(_fileno(stdout), _O_BINARY);
+#endif
+
+
 // Read one sample from stdin. Returns 1 on success, 0 on EOF.
 inline int read_sample(float* sample, int n) {
     return fread(sample, sizeof(float), n, stdin) == (size_t)n;

@@ -49,8 +49,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # manylinux_2_28 is AlmaLinux 8: binaries built against its
+          # glibc 2.28 run on nearly every current distribution, where
+          # ubuntu-24.04's headers pull in glibc 2.38 symbols. Pinned like
+          # TFLM, so the compiler can't change under the cache
           - os: linux
             runner: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64:2026.09.30-1
             shell: bash
           - os: macos
             runner: macos-15-intel
@@ -59,6 +64,7 @@ jobs:
             runner: windows-latest
             shell: msys2 {0}
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     defaults:
       run:
         shell: ${{ matrix.shell }}
@@ -81,8 +87,14 @@ jobs:
             mingw-w64-ucrt-x86_64-python-numpy
             mingw-w64-ucrt-x86_64-python-pillow
 
+      - name: Tools and Python in manylinux
+        if: matrix.os == 'linux'
+        run: |
+          dnf install -y wget unzip zip patch git
+          echo /opt/python/cp312-cp312/bin >> "$GITHUB_PATH"
+
       - uses: actions/setup-python@v7
-        if: matrix.os != 'windows'
+        if: matrix.os == 'macos'
         with:
           python-version: '3.12'
 
@@ -122,6 +134,18 @@ jobs:
         run: ./install.sh
 
       - run: make baseline variable surface prhpredict
+
+      - name: Check glibc and runtime linkage
+        if: matrix.os == 'linux'
+        run: |
+          bins="build/baseline build/variable build/surface build/prhpredict"
+          objdump -p $bins | grep NEEDED | sort | uniq -c
+          if objdump -p $bins | grep -E 'NEEDED.*(libstdc\+\+|libgcc_s)'; then
+            echo "libstdc++ or libgcc is linked dynamically"; exit 1
+          fi
+          max=$(objdump -T $bins | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "highest glibc symbol: $max"
+          [ "$(printf '%s\n' "$max" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28 ]
 
       # Apple's x86_64 linker does not ad-hoc sign the way the arm64 one does.
       # Signing doesn't lift the quarantine on a browser-downloaded zip, but an

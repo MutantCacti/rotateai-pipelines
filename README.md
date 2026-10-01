@@ -20,7 +20,7 @@ Models are HART-family Transformers ending in `L2NormalizeAngles`, which emits 6
 ./install.sh
 ```
 
-This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro) at the commit pinned in `install.sh`. A Python environment is also required for model preparation:
+This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro) at the commit pinned in `install.sh`. It needs GNU make 3.82 or later (on macOS, `brew install make` and put its `gnubin` on `PATH`), `wget`, `unzip`, and a `python3` with `numpy` and `pillow`, which TFLM's Makefile uses while parsing. A Python environment is also required for model preparation:
 
 ```sh
 python -m venv .venv    # requires Python <= 3.13
@@ -68,7 +68,9 @@ Builds are supported on x86-64 Linux, macOS (Intel) and Windows (MSYS2 UCRT64). 
 
 ### Prebuilt binaries
 
-CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embededded on all platforms.
+CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embedded on all platforms.
+
+Each zip holds the four binaries and the `model_params.h` they were built with, which gives `INPUT_CHANNELS` and `WINDOW_SIZE`. With a checkout of this repo, `python3 tools/smoke_test.py <unzipped dir>` checks them. The Linux binaries are built in a `manylinux_2_28` container, so they run on any distribution with glibc 2.28 or later. Binaries you build yourself need the glibc of the machine that built them.
 
 On macOS the binaries are ad-hoc signed. Clear the quarantine flag before running:
 

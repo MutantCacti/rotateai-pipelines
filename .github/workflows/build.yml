@@ -49,8 +49,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # manylinux_2_28 is AlmaLinux 8: binaries built against its
+          # glibc 2.28 run on nearly every current distribution, where
+          # ubuntu-24.04's headers pull in glibc 2.38 symbols. Pinned like
+          # TFLM, so the compiler can't change under the cache
           - os: linux
             runner: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64:2026.09.30-1
             shell: bash
           - os: macos
             runner: macos-15-intel
@@ -59,6 +64,7 @@ jobs:
             runner: windows-latest
             shell: msys2 {0}
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     defaults:
       run:
         shell: ${{ matrix.shell }}
@@ -72,14 +78,38 @@ jobs:
           msystem: UCRT64
           update: true
           # UCRT64 rather than MINGW64: its printf handles the %zu that
-          # pipeline_init writes arena_used_bytes with
+          # pipeline_init writes arena_used_bytes with. Native Python, not
+          # MSYS's, because that is the one with numpy and Pillow packages
           install: >-
-            make git wget unzip patch zip python
+            make git wget unzip patch zip
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-numpy
+            mingw-w64-ucrt-x86_64-python-pillow
 
-      - name: wget for TFLM downloads
+      - name: Tools and Python in manylinux
+        if: matrix.os == 'linux'
+        run: |
+          dnf install -y wget unzip zip patch git
+          echo /opt/python/cp312-cp312/bin >> "$GITHUB_PATH"
+
+      - uses: actions/setup-python@v7
         if: matrix.os == 'macos'
-        run: command -v wget || brew install wget
+        with:
+          python-version: '3.12'
+
+      # TFLM's Makefile runs generate_cc_arrays.py on its examples and tests
+      # while parsing, even to build only the library
+      - name: numpy and Pillow for TFLM
+        if: matrix.os != 'windows'
+        run: pip install numpy pillow
+
+      # macOS ships GNU make 3.81 and TFLM needs 3.82+
+      - name: GNU make and wget for TFLM
+        if: matrix.os == 'macos'
+        run: |
+          brew install make wget
+          echo "$(brew --prefix)/opt/make/libexec/gnubin" >> "$GITHUB_PATH"
 
       - uses: actions/checkout@v7
 
@@ -105,6 +135,18 @@ jobs:
 
       - run: make baseline variable surface prhpredict
 
+      - name: Check glibc and runtime linkage
+        if: matrix.os == 'linux'
+        run: |
+          bins="build/baseline build/variable build/surface build/prhpredict"
+          objdump -p $bins | grep NEEDED | sort | uniq -c
+          if objdump -p $bins | grep -E 'NEEDED.*(libstdc\+\+|libgcc_s)'; then
+            echo "libstdc++ or libgcc is linked dynamically"; exit 1
+          fi
+          max=$(objdump -T $bins | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "highest glibc symbol: $max"
+          [ "$(printf '%s\n' "$max" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28 ]
+
       # Apple's x86_64 linker does not ad-hoc sign the way the arm64 one does.
       # Signing doesn't lift the quarantine on a browser-downloaded zip, but an
       # unsigned binary won't run even once that is cleared
@@ -116,11 +158,14 @@ jobs:
 
       - run: python3 tools/smoke_test.py build
 
+      # model_params.h says how many floats each sample takes, and lets
+      # smoke_test.py run on the unzipped download
       - name: Package
         run: |
           mkdir -p dist
           zip -j dist/rotateai-pipelines-${{ matrix.os }}-x86_64.zip \
-            build/baseline* build/variable* build/surface* build/prhpredict*
+            build/baseline* build/variable* build/surface* build/prhpredict* \
+            build/models/model_params.h
 
       # archive: false uploads the zip as-is instead of zipping it again
       - uses: actions/upload-artifact@v7

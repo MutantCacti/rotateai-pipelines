@@ -7,8 +7,9 @@ finite float32s after every 0x01. Checks the protocol, not accuracy.
 The accelerometer values contain bytes 0x1A and 0x0A, which a Windows binary
 left in text mode would treat as end-of-file and newline.
 
-Channel count and window size are read from build/models/model_params.h,
-so the expected counts follow whatever model was converted.
+Channel count and window size are read from model_params.h, in models/
+under a build directory or beside the binaries in an unzipped release, so
+the expected counts follow whatever model was converted.
 
 usage: python tools/smoke_test.py [BUILD_DIR]
 
@@ -34,6 +35,14 @@ def read_params(path):
     '''Integer #defines from model_params.h.'''
     text = path.read_text()
     return {k: int(v) for k, v in re.findall(r'#define (\w+) (\d+)\s', text)}
+
+
+def find_params(build_dir):
+    '''model_params.h from a build tree or an unzipped release.'''
+    for p in (build_dir / 'models' / 'model_params.h', build_dir / 'model_params.h'):
+        if p.is_file():
+            return p
+    sys.exit(f'FAIL: no model_params.h in {build_dir} or {build_dir / "models"}')
 
 
 def binary(build_dir, name):
@@ -86,7 +95,7 @@ def run(build_dir, name, args, depths, channels, n_out, expect):
 
 def main():
     build_dir = Path(sys.argv[1] if len(sys.argv) > 1 else 'build')
-    params = read_params(build_dir / 'models' / 'model_params.h')
+    params = read_params(find_params(build_dir))
     window, channels = params['WINDOW_SIZE'], params['INPUT_CHANNELS']
     n_out = params['OUTPUT_CHANNELS']
 

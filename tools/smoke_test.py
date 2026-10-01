@@ -117,6 +117,10 @@ def main():
         ('prhpredict', ['--min-aniso', '0'], prh_depths, PRH_CHANNELS, PRH_OUTPUT,
          at_least_one),
     ]
+    # Candidate pipeline, only where it was built: CI does not build it yet
+    if any((build_dir / n).is_file() for n in ('prhsurface', 'prhsurface.exe')):
+        cases.append(('prhsurface', ['--min-aniso', '0'], prh_depths, PRH_CHANNELS,
+                      PRH_OUTPUT, exactly([30])))
 
     failed = 0
     for name, args, depths, ch, n, expect in cases:

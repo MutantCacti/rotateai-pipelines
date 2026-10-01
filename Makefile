@@ -56,9 +56,16 @@ build/surface$(EXE): src/surface.cc src/pipeline.h src/protocol.h $(GEN_DIR)/mod
 # default). Output is still not bit identical across OSes: each libm can
 # differ in the last bit of sin/cos/atan2, so compare with a tolerance
 prhpredict: build/prhpredict$(EXE)
-build/prhpredict$(EXE): src/prhpredict.cc src/protocol.h
+build/prhpredict$(EXE): src/prhpredict.cc src/prh.h src/protocol.h
 	@mkdir -p build
 	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhpredict.cc -o $@ $(LDFLAGS)
+
+
+# Candidate replacement for prhpredict, not yet built by CI
+prhsurface: build/prhsurface$(EXE)
+build/prhsurface$(EXE): src/prhsurface.cc src/prh.h src/protocol.h
+	@mkdir -p build
+	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhsurface.cc -o $@ $(LDFLAGS)
 
 
 # Model conversion, needs the Python environment. Not a prerequisite of the
@@ -76,5 +83,5 @@ clean:
 	rm -rf build/
 
 
-.PHONY: baseline variable surface prhpredict models clean
+.PHONY: baseline variable surface prhpredict prhsurface models clean
 

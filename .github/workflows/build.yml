@@ -158,11 +158,14 @@ jobs:
 
       - run: python3 tools/smoke_test.py build
 
+      # model_params.h says how many floats each sample takes, and lets
+      # smoke_test.py run on the unzipped download
       - name: Package
         run: |
           mkdir -p dist
           zip -j dist/rotateai-pipelines-${{ matrix.os }}-x86_64.zip \
-            build/baseline* build/variable* build/surface* build/prhpredict*
+            build/baseline* build/variable* build/surface* build/prhpredict* \
+            build/models/model_params.h
 
       # archive: false uploads the zip as-is instead of zipping it again
       - uses: actions/upload-artifact@v7

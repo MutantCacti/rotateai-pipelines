@@ -55,7 +55,7 @@ def binary(build_dir, name):
 
 def stream(depths, channels):
     '''Samples [ax ay az (mx my mz) p] packed as float32. The accelerometer
-    wobbles so prhpredict's descent scatter is not degenerate.'''
+    wobbles so prhpredict's surfacing scatter is not degenerate.'''
     out = bytearray()
     for i, depth in enumerate(depths):
         a = [TRAP, 0.3 * math.sin(i / 3), 0.8 + 0.1 * math.cos(i / 5)]
@@ -102,25 +102,19 @@ def main():
     def exactly(want):
         return lambda got: None if got == want else f'emitted at {got}, expected {want}'
 
-    def at_least_one(got):
-        return None if got else 'never emitted'
-
     surface_args = ['--strategy', 'start', '--surface-depth', '5', '--dive-depth', '10']
-    # Breath at the surface, then a descent past dive depth long enough to
-    # emit. --min-aniso 0 so a synthetic descent cannot be rejected.
-    prh_depths = [0.0] * 30 + [20.0 + 0.1 * i for i in range(100)]
+    # 60 samples breathing at the surface (prhpredict needs 50), then a dive:
+    # it emits on the sample that crosses dive depth. --min-aniso 0 so the
+    # synthetic surfacing cannot be rejected.
+    prh_depths = [0.0] * 60 + [20.0 + 0.1 * i for i in range(100)]
 
     cases = [
         ('baseline', [], [0.0] * 20, channels, n_out, exactly(list(range(20)))),
         ('variable', ['--offset', '10'], [0.0] * 20, channels, n_out, exactly([0, 10])),
         ('surface', surface_args, [0.0] * window, channels, n_out, exactly([window - 1])),
         ('prhpredict', ['--min-aniso', '0'], prh_depths, PRH_CHANNELS, PRH_OUTPUT,
-         at_least_one),
+         exactly([60])),
     ]
-    # Candidate pipeline, only where it was built: CI does not build it yet
-    if any((build_dir / n).is_file() for n in ('prhsurface', 'prhsurface.exe')):
-        cases.append(('prhsurface', ['--min-aniso', '0'], prh_depths, PRH_CHANNELS,
-                      PRH_OUTPUT, exactly([30])))
 
     failed = 0
     for name, args, depths, ch, n, expect in cases:

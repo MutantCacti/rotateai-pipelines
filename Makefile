@@ -61,12 +61,6 @@ build/prhpredict$(EXE): src/prhpredict.cc src/prh.h src/protocol.h
 	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhpredict.cc -o $@ $(LDFLAGS)
 
 
-# Candidate replacement for prhpredict, not yet built by CI
-prhsurface: build/prhsurface$(EXE)
-build/prhsurface$(EXE): src/prhsurface.cc src/prh.h src/protocol.h
-	@mkdir -p build
-	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhsurface.cc -o $@ $(LDFLAGS)
-
 
 # Model conversion, needs the Python environment. Not a prerequisite of the
 # pipelines, so a build never runs TensorFlow on its own
@@ -83,5 +77,5 @@ clean:
 	rm -rf build/
 
 
-.PHONY: baseline variable surface prhpredict prhsurface models clean
+.PHONY: baseline variable surface prhpredict models clean
 

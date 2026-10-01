@@ -1,24 +1,26 @@
 /*
  * src/prhpredict.cc
- * Tag orientation with no model: method 1 of Mark Johnson's prhpredictor.m
- * (WHOI), made causal and streaming. Line references below are to that file.
+ * Tag orientation with no model, from surfacings alone: p0 and r0 from the
+ * logging mean (prhpredictor.m method 1, line 185), h0 from the surfacing's
+ * plane of motion. With p0/r0 fixed, method 2's alignment of the plane normal
+ * with y (lines 247-256) is method 1's lateral-energy solve (lines 191-201) on
+ * the logging segment. Emits when the animal leaves the surface.
  *
  * Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]
- *                   [--descent-samples N] [--min-breath N] [--log-samples N]
- *                   [--ascent-samples N] [--ascent-blocks N] [--min-ascent N]
- *                   [--min-aniso X] [--min-aniso-up X] [--no-ascents]
+ *                   [--heading-depth M] [--emit-depth M] [--min-breath N]
+ *                   [--block-samples N] [--log-blocks N] [--heading-blocks N]
+ *                   [--refresh-samples N] [--min-aniso X]
  *
  * Compile-time switches, all off by default:
  *   -DSINGLE_PRECISION  all arithmetic in float instead of double
  *   -DVERBOSE           trace emissions and rejections to stderr
  *   -DSTATS             print per-state sample counts at EOF
  *
- * Created: 2026-09-02
- * Authors: Maxence Morel Dierckx, Claude Opus 5, Claude Opus 5.5
+ * Created: 2026-10-01
+ * Authors: Maxence Morel Dierckx, Claude Opus 5.5
  */
 
 
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -47,151 +49,176 @@
 #endif
 
 
-// Depth thresholds, metres.
+// Depth thresholds, metres. Heading and emit depths default to breath and dive.
 static float SURFACE_DEPTH = 5.0f;
 static float BREATH_DEPTH  = 3.0f;
 static float DIVE_DEPTH    = 10.0f;
+static float HEADING_DEPTH = -1.0f;
+static float EMIT_DEPTH    = -1.0f;
 
 
 // Sample counts assume 5 Hz.
-static int DESCENT_SAMPLES = 100;   // 20 s
-static int MIN_BREATH      = 25;    // 5 s
-static int LOG_SAMPLES     = 450;   // 90 s, the logging segment [-100 -10] s (line 52)
-static int ASCENT_SAMPLES  = 200;   // 40 s before the surface edge (lines 52, 84); 0: all
-static int MIN_ASCENT      = 25;    // 5 s
+static int MIN_BREATH      = 50;    // 10 s
+static int BLOCK_SAMPLES   = 25;    // 5 s
+// Emit every N samples of an unbroken surfacing, so an animal that never dives
+// still gets corrections. 12 min only reaches surfacings that long; 0: off.
+static int REFRESH_SAMPLES = 3600;
 
 
-// The ascent's start is only known once it reaches the surface, so it is kept
-// as a ring of block sums and the last ASCENT_SAMPLES are approximated by
-// whole blocks.
-#define MAX_BLOCKS 8
-static int ASCENT_BLOCKS = 4;
-static int ASCENTS = 1;             // --no-ascents: never wake for one
+// Windows are the newest N blocks of the surfacing; 0 is the whole surfacing.
+// A long surfacing is often milling, so the heading window may want to be
+// shorter than the p0/r0 one.
+#define MAX_BLOCKS 64
+static int LOG_BLOCKS     = 0;
+static int HEADING_BLOCKS = 0;
 
 
-// Minimum contrast (max - min) / (max + min) of the lateral-energy curve in h.
-// Replaces the planarity ratio cc (line 217). 0 disables rejection.
-static real MIN_ANISO = R(0.67);
-static real MIN_ANISO_UP = R(0.85);  // ascents are less often planar
+static real MIN_ANISO = R(0.6);
 
 
-enum { ST_DIVE = 0, ST_SHALLOW, ST_BREATH, ST_DESCENT, ST_ASCENT };
+enum { ST_DIVE = 0, ST_SHALLOW, ST_BREATH };
+
+
+// One block of the surfacing: the logging sum (Ak1, line 95) and the heading
+// segment's scatter.
+typedef struct {
+    real     a_sum[3];
+    uint32_t n_log;
+    Segment  head;
+    int      n;             // surfacing samples in the block
+} Block;
 
 
 typedef struct {
     int      st;
     size_t   sample_idx;
 
-    // Logging segment Ak1 (line 95): A below BREATH_DEPTH.
-    real     a_sum[3];
-    uint32_t n_breath;
-
-    Segment  descent;
-
-    // An ascent pairs with the logging segment after it (lines 84-86), so it
-    // waits for that before it can be solved.
-    Segment  ascent[MAX_BLOCKS];
-    int      ascent_cur;
-    int      ascent_pending;
-    float    wake_depth;    // where the descent window ended; 0 when unset
+    Block    total;         // the whole surfacing
+    Block    ring[MAX_BLOCKS];
+    int      cur, filled;
+    int      since_emit;
 
 #ifdef STATS
-    uint64_t n_state[5], n_segment_add, n_solve, n_write;
+    uint64_t n_state[3], n_log_add, n_head_add, n_solve, n_write;
 #endif
 } State;
 
 
-static void add_sample(State *s, Segment *g, const float a[3], float depth)
+static void block_reset(Block *b)
 {
-    STAT(s->n_segment_add++);
-    (void)s;
-    segment_add(g, a, depth);
+    b->a_sum[0] = b->a_sum[1] = b->a_sum[2] = R(0);
+    b->n_log = 0;
+    segment_reset(&b->head);
+    b->n = 0;
 }
 
 
-static void ascent_reset(State *s)
+static void surfacing_reset(State *s)
 {
-    for (int i = 0; i < ASCENT_BLOCKS; i++) segment_reset(&s->ascent[i]);
-    s->ascent_cur = 0;
+    block_reset(&s->total);
+    for (int i = 0; i < MAX_BLOCKS; i++) block_reset(&s->ring[i]);
+    s->cur = s->filled = 0;
+    s->since_emit = 0;
 }
 
 
-static void ascent_add(State *s, const float a[3], float depth)
+static void add_to(Block *b, const float a[3], float depth, int log, int head)
 {
-    Segment *g = &s->ascent[s->ascent_cur];
-    if (ASCENT_SAMPLES && g->n == ASCENT_SAMPLES / ASCENT_BLOCKS) {
-        const float prev = g->prev_depth;
-        s->ascent_cur = (s->ascent_cur + 1) % ASCENT_BLOCKS;
-        g = &s->ascent[s->ascent_cur];
-        segment_reset(g);
-        g->prev_depth = prev;
-        g->have_prev = 1;
+    if (log) {
+        b->a_sum[0] += R(a[0]); b->a_sum[1] += R(a[1]); b->a_sum[2] += R(a[2]);
+        b->n_log++;
     }
-    add_sample(s, g, a, depth);
+    if (head)
+        segment_add(&b->head, a, depth);
+    b->n++;
 }
 
 
-static void ascent_total(const State *s, Segment *t)
+// One surfacing sample, into the whole-surfacing total and the ring. `log` is
+// ST_BREATH, as for prhpredict's logging segment; the heading segment takes the
+// same samples unless --heading-depth differs from the breath depth.
+static void surfacing_sample(State *s, const float a[3], float depth, int log)
 {
-    segment_reset(t);
-    for (int b = 0; b < ASCENT_BLOCKS; b++) {
-        for (int i = 0; i < 6; i++) t->S[i] += s->ascent[b].S[i];
-        for (int i = 0; i < 3; i++) t->D[i] += s->ascent[b].D[i];
-        t->n += s->ascent[b].n;
+    const int head = HEADING_DEPTH == BREATH_DEPTH ? log : depth < HEADING_DEPTH;
+    STAT(if (log) s->n_log_add++; if (head) s->n_head_add++);
+
+    Block *b = &s->ring[s->cur];
+    if (s->filled == 0)
+        s->filled = 1;
+    else if (b->n == BLOCK_SAMPLES) {
+        // Keep the depth rate continuous across the block boundary
+        const float prev_depth = b->head.prev_depth;
+        const int have_prev = b->head.have_prev;
+        s->cur = (s->cur + 1) % MAX_BLOCKS;
+        b = &s->ring[s->cur];
+        block_reset(b);
+        b->head.prev_depth = prev_depth;
+        b->head.have_prev = have_prev;
+        if (s->filled < MAX_BLOCKS) s->filled++;
+    }
+    add_to(b, a, depth, log, head);
+    add_to(&s->total, a, depth, log, head);
+    s->since_emit++;
+}
+
+
+// The newest k blocks (0: the whole surfacing) summed into w.
+static void window(const State *s, int k, Block *w)
+{
+    if (k == 0 || k >= s->filled) {
+        if (k == 0 || s->filled < MAX_BLOCKS) { *w = s->total; return; }
+    }
+    block_reset(w);
+    for (int i = 0; i < k && i < s->filled; i++) {
+        const Block *b = &s->ring[(s->cur - i + MAX_BLOCKS) % MAX_BLOCKS];
+        for (int j = 0; j < 3; j++) w->a_sum[j] += b->a_sum[j];
+        w->n_log += b->n_log;
+        for (int j = 0; j < 6; j++) w->head.S[j] += b->head.S[j];
+        for (int j = 0; j < 3; j++) w->head.D[j] += b->head.D[j];
+        w->head.n += b->head.n;
+        w->n += b->n;
     }
 }
 
 
-static void logging_reset(State *s)
+// Solve the current windows and emit. Returns 1 if a correction was written,
+// 0 if the sample still owes a skip byte.
+static int emit(State *s)
 {
-    s->a_sum[0] = s->a_sum[1] = s->a_sum[2] = R(0);
-    s->n_breath = 0;
-}
-
-
-// Solve a segment against the current logging mean and emit. Returns 1 if a
-// correction was written, 0 if the sample still owes a skip byte.
-static int emit(State *s, const Segment *g, const char *dir, real min_aniso)
-{
+    Block lw, hw;
+    window(s, LOG_BLOCKS, &lw);
+    window(s, HEADING_BLOCKS, &hw);
+    if (lw.n_log < (uint32_t)MIN_BREATH || hw.head.n < 2)
+        return 0;
     STAT(s->n_solve++);
-    (void)dir;
 
     real p0, r0;
-    a2pr(s->a_sum, &p0, &r0);
+    a2pr(lw.a_sum, &p0, &r0);
 
     // Rows 0 and 1 of makeT([p0 r0 0]) (line 188).
     real Q[3][3];
     make_T(p0, r0, R(0), Q);
-    const real Sxx = quad(g->S, Q[0], Q[0]);
-    const real Syy = quad(g->S, Q[1], Q[1]);
-    const real Sxy = quad(g->S, Q[0], Q[1]);
+    const real Sxx = quad(hw.head.S, Q[0], Q[0]);
+    const real Syy = quad(hw.head.S, Q[1], Q[1]);
+    const real Sxy = quad(hw.head.S, Q[0], Q[1]);
 
     const real aniso = contrast(Sxx, Syy, Sxy);
-    if (aniso < min_aniso) {
-        TRACE("reject idx=%zu %s aniso=%.4f\n", s->sample_idx, dir, (double)aniso);
+    if (aniso < MIN_ANISO) {
+        TRACE("reject idx=%zu surface aniso=%.4f n_log=%u n_head=%d\n",
+              s->sample_idx, (double)aniso, lw.n_log, hw.head.n);
         return 0;
     }
 
-    // The branch rule holds for ascents too, where nose-up meets decreasing depth.
     real corr;
-    const real h0 = resolve_branch(solve_h(Sxx, Syy, Sxy), Q, g->D, &corr);
+    const real h0 = resolve_branch(solve_h(Sxx, Syy, Sxy), Q, hw.head.D, &corr);
 
     const float out[N_OUTPUT] = { (float)p0, (float)r0, (float)h0 };
     write_output(out, N_OUTPUT);
     STAT(s->n_write++);
-    TRACE("emit idx=%zu %s p=%.1f r=%.1f h=%.1f aniso=%.4f n=%d n_log=%u dir=%+.3f\n",
-          s->sample_idx, dir, (double)(p0 * R(180) / PI), (double)(r0 * R(180) / PI),
-          (double)(h0 * R(180) / PI), (double)aniso, g->n, s->n_breath, (double)corr);
+    TRACE("emit idx=%zu surface p=%.1f r=%.1f h=%.1f aniso=%.4f n_log=%u n_head=%d corr=%+.3f\n",
+          s->sample_idx, (double)(p0 * R(180) / PI), (double)(r0 * R(180) / PI),
+          (double)(h0 * R(180) / PI), (double)aniso, lw.n_log, hw.head.n, (double)corr);
     return 1;
-}
-
-
-static int emit_ascent(State *s)
-{
-    Segment t;
-    ascent_total(s, &t);
-    s->ascent_pending = 0;
-    return emit(s, &t, "up", MIN_ANISO_UP);
 }
 
 
@@ -202,9 +229,9 @@ static void usage(void)
 {
     fprintf(stderr,
         "Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]\n"
-        "                  [--descent-samples N] [--min-breath N] [--log-samples N]\n"
-        "                  [--ascent-samples N] [--ascent-blocks N] [--min-ascent N]\n"
-        "                  [--min-aniso X] [--min-aniso-up X] [--no-ascents]\n"
+        "                  [--heading-depth M] [--emit-depth M] [--min-breath N]\n"
+        "                  [--block-samples N] [--log-blocks N] [--heading-blocks N]\n"
+        "                  [--refresh-samples N] [--min-aniso X]\n"
         "Defaults: %s\n", defaults);
 }
 
@@ -212,12 +239,12 @@ static void usage(void)
 int main(int argc, const char *argv[])
 {
     snprintf(defaults, sizeof(defaults),
-             "surface %g m, breath %g m, dive %g m, descent %d, min-breath %d, "
-             "log-samples %d, ascent-samples %d, ascent-blocks %d, min-ascent %d, "
-             "min-aniso %g, min-aniso-up %g, ascents on",
+             "surface %g m, breath %g m, dive %g m, heading = breath depth, "
+             "emit = dive depth, min-breath %d, block-samples %d, log-blocks %d, "
+             "heading-blocks %d (0: whole surfacing), refresh-samples %d, min-aniso %g",
              (double)SURFACE_DEPTH, (double)BREATH_DEPTH, (double)DIVE_DEPTH,
-             DESCENT_SAMPLES, MIN_BREATH, LOG_SAMPLES, ASCENT_SAMPLES, ASCENT_BLOCKS,
-             MIN_ASCENT, (double)MIN_ANISO, (double)MIN_ANISO_UP);
+             MIN_BREATH, BLOCK_SAMPLES, LOG_BLOCKS, HEADING_BLOCKS, REFRESH_SAMPLES,
+             (double)MIN_ANISO);
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -225,39 +252,36 @@ int main(int argc, const char *argv[])
         if      (has && !strcmp(a, "--surface-depth"))   SURFACE_DEPTH   = atof(argv[++i]);
         else if (has && !strcmp(a, "--breath-depth"))    BREATH_DEPTH    = atof(argv[++i]);
         else if (has && !strcmp(a, "--dive-depth"))      DIVE_DEPTH      = atof(argv[++i]);
-        else if (has && !strcmp(a, "--descent-samples")) DESCENT_SAMPLES = atoi(argv[++i]);
+        else if (has && !strcmp(a, "--heading-depth"))   HEADING_DEPTH   = atof(argv[++i]);
+        else if (has && !strcmp(a, "--emit-depth"))      EMIT_DEPTH      = atof(argv[++i]);
         else if (has && !strcmp(a, "--min-breath"))      MIN_BREATH      = atoi(argv[++i]);
-        else if (has && !strcmp(a, "--log-samples"))     LOG_SAMPLES     = atoi(argv[++i]);
-        else if (has && !strcmp(a, "--ascent-samples"))  ASCENT_SAMPLES  = atoi(argv[++i]);
-        else if (has && !strcmp(a, "--ascent-blocks"))   ASCENT_BLOCKS   = atoi(argv[++i]);
-        else if (has && !strcmp(a, "--min-ascent"))      MIN_ASCENT      = atoi(argv[++i]);
-        else if (has && !strcmp(a, "--min-aniso-up"))    MIN_ANISO_UP    = R(atof(argv[++i]));
-        else if (!strcmp(a, "--no-ascents"))             ASCENTS         = 0;
+        else if (has && !strcmp(a, "--block-samples"))   BLOCK_SAMPLES   = atoi(argv[++i]);
+        else if (has && !strcmp(a, "--log-blocks"))      LOG_BLOCKS      = atoi(argv[++i]);
+        else if (has && !strcmp(a, "--heading-blocks"))  HEADING_BLOCKS  = atoi(argv[++i]);
+        else if (has && !strcmp(a, "--refresh-samples")) REFRESH_SAMPLES = atoi(argv[++i]);
         else if (has && !strcmp(a, "--min-aniso"))       MIN_ANISO       = R(atof(argv[++i]));
         else { usage(); return 1; }
     }
-    if (DESCENT_SAMPLES < 2 || MIN_BREATH < 1 || LOG_SAMPLES < MIN_BREATH ||
-        MIN_ASCENT < 2 || ASCENT_BLOCKS < 1 || ASCENT_BLOCKS > MAX_BLOCKS ||
-        (ASCENT_SAMPLES && ASCENT_SAMPLES < ASCENT_BLOCKS) || MIN_ANISO_UP > R(1) ||
-        MIN_ANISO < R(0) || MIN_ANISO > R(1) || MIN_ANISO_UP < R(0) ||
-        !(BREATH_DEPTH < SURFACE_DEPTH && SURFACE_DEPTH < DIVE_DEPTH)) {
+    if (HEADING_DEPTH < 0.0f) HEADING_DEPTH = BREATH_DEPTH;
+    if (EMIT_DEPTH < 0.0f) EMIT_DEPTH = DIVE_DEPTH;
+    if (MIN_BREATH < 1 || BLOCK_SAMPLES < 1 || REFRESH_SAMPLES < 0 ||
+        LOG_BLOCKS < 0 || LOG_BLOCKS > MAX_BLOCKS ||
+        HEADING_BLOCKS < 0 || HEADING_BLOCKS > MAX_BLOCKS ||
+        MIN_ANISO < R(0) || MIN_ANISO > R(1) ||
+        !(BREATH_DEPTH < SURFACE_DEPTH && SURFACE_DEPTH < DIVE_DEPTH) ||
+        HEADING_DEPTH <= 0.0f || EMIT_DEPTH < SURFACE_DEPTH) {
         usage();
-        fprintf(stderr, "Need descent >= 2, 1 <= min-breath <= log-samples, min-ascent >= 2, "
-                        "1 <= ascent-blocks <= %d, ascent-samples 0 or >= ascent-blocks, "
-                        "min-aniso and min-aniso-up in [0, 1], breath < surface < dive.\n", MAX_BLOCKS);
+        fprintf(stderr, "Need min-breath >= 1, block-samples >= 1, refresh-samples >= 0, "
+                        "0 <= log-blocks and heading-blocks <= %d, 0 <= min-aniso <= 1, "
+                        "breath < surface < dive, heading-depth > 0, "
+                        "emit-depth >= surface.\n", MAX_BLOCKS);
         return 1;
     }
 
     State s;
     memset(&s, 0, sizeof(s));
-    logging_reset(&s);
+    surfacing_reset(&s);
     s.st = ST_DIVE;
-
-    // Same key and format the TFLite pipelines use for their tensor arena
-    // (pipeline.h), so the simulator reports memory for this pipeline too.
-    // State is the whole working set: there is no heap allocation here, and
-    // the ascent ring is a fixed MAX_BLOCKS array.
-    fprintf(stderr, "arena_used_bytes:%zu\n", sizeof(State));
 
     float sample[N_INPUT];
     while (read_sample(sample, N_INPUT)) {
@@ -268,65 +292,30 @@ int main(int argc, const char *argv[])
         STAT(s.n_state[s.st]++);
 
         // Transition first, so the sample that crosses a threshold is
-        // processed by the state it enters.
+        // processed by the state it enters. Leaving the surface ends the
+        // surfacing: solve it, then start the next one empty.
         switch (s.st) {
         case ST_DIVE:
-            if (s.wake_depth > 0.0f && depth < s.wake_depth && depth > SURFACE_DEPTH) {
-                ascent_reset(&s);
-                s.st = ST_ASCENT;
-            }
-            else if (depth < BREATH_DEPTH)  s.st = ST_BREATH;
+            if (depth < BREATH_DEPTH)       s.st = ST_BREATH;
             else if (depth < SURFACE_DEPTH) s.st = ST_SHALLOW;
-            break;
-        case ST_ASCENT:
-            if (depth > s.wake_depth)
-                s.st = ST_DIVE;             // dived again: restart on the next rise
-            else if (depth < SURFACE_DEPTH) {   // the surface edge (line 84)
-                Segment t;
-                ascent_total(&s, &t);
-                s.ascent_pending = t.n >= MIN_ASCENT;
-                s.wake_depth = 0.0f;
-                s.st = depth < BREATH_DEPTH ? ST_BREATH : ST_SHALLOW;
-            }
             break;
         case ST_SHALLOW:
         case ST_BREATH:
-            s.wake_depth = 0.0f;
-            if (depth > DIVE_DEPTH) {
-                if (s.n_breath >= (uint32_t)MIN_BREATH) {
-                    if (s.ascent_pending)
-                        wrote = emit_ascent(&s);
-                    segment_reset(&s.descent);
-                    s.st = ST_DESCENT;
-                } else {
-                    logging_reset(&s);
-                    s.st = ST_DIVE;
-                }
-                s.ascent_pending = 0;
+            if (depth > EMIT_DEPTH) {
+                wrote = emit(&s);
+                surfacing_reset(&s);
+                s.st = ST_DIVE;
             }
             else if (depth < BREATH_DEPTH)  s.st = ST_BREATH;
             else if (depth > BREATH_DEPTH)  s.st = ST_SHALLOW;
             break;
-        case ST_DESCENT:                    // aborted dive keeps the logging sum
-            if (depth < BREATH_DEPTH)       s.st = ST_BREATH;
-            else if (depth < SURFACE_DEPTH) s.st = ST_SHALLOW;
-            break;
         }
 
-        if (s.st == ST_BREATH) {
-            s.a_sum[0] += R(a[0]); s.a_sum[1] += R(a[1]); s.a_sum[2] += R(a[2]);
-            if (++s.n_breath == (uint32_t)LOG_SAMPLES && s.ascent_pending)
-                wrote = emit_ascent(&s);
-        } else if (s.st == ST_ASCENT) {
-            ascent_add(&s, a, depth);
-        } else if (s.st == ST_DESCENT) {
-            add_sample(&s, &s.descent, a, depth);
-            if (s.descent.n >= DESCENT_SAMPLES) {
-                wrote = emit(&s, &s.descent, "down", MIN_ANISO);
-                logging_reset(&s);
-                // A wake depth of 0 leaves ST_ASCENT unreachable
-                s.wake_depth = !ASCENTS ? 0.0f : depth > DIVE_DEPTH ? depth : DIVE_DEPTH;
-                s.st = ST_DIVE;
+        if (s.st != ST_DIVE) {
+            surfacing_sample(&s, a, depth, s.st == ST_BREATH);
+            if (REFRESH_SAMPLES && s.since_emit >= REFRESH_SAMPLES) {
+                wrote = emit(&s);
+                s.since_emit = 0;
             }
         }
 
@@ -337,15 +326,14 @@ int main(int argc, const char *argv[])
 
 #ifdef STATS
     fprintf(stderr,
-            "census total=%zu dive=%llu shallow=%llu breath=%llu descent=%llu ascent=%llu "
-            "segadd=%llu solve=%llu write=%llu\n",
+            "census total=%zu dive=%llu shallow=%llu breath=%llu logadd=%llu headadd=%llu "
+            "solve=%llu write=%llu\n",
             s.sample_idx,
             (unsigned long long)s.n_state[ST_DIVE],
             (unsigned long long)s.n_state[ST_SHALLOW],
             (unsigned long long)s.n_state[ST_BREATH],
-            (unsigned long long)s.n_state[ST_DESCENT],
-            (unsigned long long)s.n_state[ST_ASCENT],
-            (unsigned long long)s.n_segment_add,
+            (unsigned long long)s.n_log_add,
+            (unsigned long long)s.n_head_add,
             (unsigned long long)s.n_solve,
             (unsigned long long)s.n_write);
 #endif

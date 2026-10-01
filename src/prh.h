@@ -1,7 +1,7 @@
 /*
  * src/prh.h
- * Orientation maths shared by prhpredict and prhsurface: Mark Johnson's
- * prhpredictor.m (WHOI), method 1. Line references are to that file.
+ * Orientation maths for prhpredict: Mark Johnson's prhpredictor.m (WHOI),
+ * method 1. Line references are to that file.
  *
  * -DSINGLE_PRECISION switches every calculation here to float.
  *

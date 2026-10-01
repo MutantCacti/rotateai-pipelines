@@ -1,12 +1,14 @@
 # RotateAI Pipelines
 
+[![build](https://github.com/mtmd1/rotateai-pipelines/actions/workflows/build.yml/badge.svg)](https://github.com/mtmd1/rotateai-pipelines/actions/workflows/build.yml)
+
 Inference pipelines for on-tag whale orientation correction. Designed for STM32U5 deployment, tested with [rotateai-simulator](https://github.com/mtmd1/rotateai-simulator).
 
 Each pipeline reads sensor data from stdin and writes corrected orientation angles to stdout using binary float32. They differ in when and how often inference runs.
 
 ## I/O shape
 
-- **Input** (per sample): 4 float32 — `ax, ay, az, p` (accelerometer xyz in g, depth in m). 16 bytes.
+- **Input** (per sample): `INPUT_CHANNELS` float32, set by the model in `build/models/model_params.h`, with depth last. A 4-channel model takes `ax, ay, az, p` (accelerometer xyz in g, depth in m, 16 bytes). The 7-channel model takes `ax, ay, az, mx, my, mz, p` (28 bytes). `prhpredict` has no model and always takes the 4-channel layout.
 - **Output** (per emitted prediction): 1 flag byte + 3 float32 — `pitch, roll, heading` in radians, in `(-π, π]`. 13 bytes when flag=`0x01`.
 - **Skip**: 1 flag byte `0x00`. No payload.
 
@@ -18,15 +20,17 @@ Models are HART-family Transformers ending in `L2NormalizeAngles`, which emits 6
 ./install.sh
 ```
 
-This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro). A Python environment is also required for model preparation:
+This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro) at the commit pinned in `install.sh`. A Python environment is also required for model preparation:
 
 ```sh
 python -m venv .venv    # requires Python <= 3.13
 source .venv/bin/activate
-pip install tensorflow numpy
+pip install -r tools/requirements.txt
 ```
 
 The HART custom Keras layers are vendored under `tools/model/`; no external `PYTHONPATH` setup is needed.
+
+The versions in `tools/requirements.txt` are pinned because the converted model depends on them.
 
 ## Model Preparation
 
@@ -34,6 +38,12 @@ Converts a Keras model (and optional preprocessing parameters) into C-compatible
 
 ```sh
 source .venv/bin/activate
+make models
+```
+
+This converts the vendored model in `models/`. For any other model:
+
+```sh
 python tools/prepare_model.py --model /path/to/model.keras [--params /path/to/params.pkl]
 ```
 
@@ -53,6 +63,20 @@ make prhpredict
 ```
 
 `prhpredict` has no model, so it needs neither TFLite Micro nor model preparation — just a C++ compiler.
+
+Builds are supported on x86-64 Linux, macOS (Intel) and Windows (MSYS2 UCRT64). Linux binaries link libstdc++ and libgcc statically, and Windows binaries are fully static.
+
+### Prebuilt binaries
+
+CI builds all four pipelines on every push. Zips are attached to each run, and to the GitHub Release for every `v*` tag. Model conversion runs once on Linux, so every platform embeds the same model bytes.
+
+On macOS the binaries are ad-hoc signed. Clear the quarantine flag before running:
+
+```sh
+xattr -d com.apple.quarantine baseline variable surface prhpredict
+```
+
+Outputs are not bit-identical across operating systems.
 
 ## Current Pipelines
 

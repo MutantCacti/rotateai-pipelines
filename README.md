@@ -68,7 +68,7 @@ Builds are supported on x86-64 Linux, macOS (Intel) and Windows (MSYS2 UCRT64). 
 
 ### Prebuilt binaries
 
-CI builds all four pipelines on every push. Zips are attached to each run, and to the GitHub Release for every `v*` tag. Model conversion runs once on Linux, so every platform embeds the same model bytes.
+CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embededded on all platforms.
 
 On macOS the binaries are ad-hoc signed. Clear the quarantine flag before running:
 
@@ -85,7 +85,7 @@ Outputs are not bit-identical across operating systems.
 | `baseline` | Every sample | Maximum accuracy and cost. |
 | `variable` | Every X samples | Measures a sample window periodically. |
 | `surface`  | Event-triggered | Detects surfacing periods and runs inference on them. |
-| `prhpredict` | Event-triggered, no model | Mark Johnson's prhpredictor method 1. Get pitch and roll from the mean acceleration while breathing at the surface, heading from the assumption of planarity in pitch on descent. |
+| `prhpredict` | Event-triggered, no model | Mark Johnson's prhpredictor method 1. Get pitch and roll from the mean acceleration while breathing at the surface, heading from the assumption of planarity in pitch on descent and ascent. |
 
 The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly. `start` emits as soon as its window fills rather than waiting for the dive, so `--min-samples` is fixed at the window size for that strategy. `bookend` falls back to the end window alone when the surfacing period is shorter than two windows.
 

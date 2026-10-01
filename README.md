@@ -68,7 +68,7 @@ Builds are supported on x86-64 Linux, macOS (Intel) and Windows (MSYS2 UCRT64). 
 
 ### Prebuilt binaries
 
-CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embededded on all platforms.
+CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embedded on all platforms.
 
 On macOS the binaries are ad-hoc signed. Clear the quarantine flag before running:
 

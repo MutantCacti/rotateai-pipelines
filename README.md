@@ -20,7 +20,7 @@ Models are HART-family Transformers ending in `L2NormalizeAngles`, which emits 6
 ./install.sh
 ```
 
-This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro) at the commit pinned in `install.sh`. A Python environment is also required for model preparation:
+This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro) at the commit pinned in `install.sh`. It needs GNU make 3.82 or later (on macOS, `brew install make` and put its `gnubin` on `PATH`), `wget`, `unzip`, and a `python3` with `numpy` and `pillow`, which TFLM's Makefile uses while parsing. A Python environment is also required for model preparation:
 
 ```sh
 python -m venv .venv    # requires Python <= 3.13

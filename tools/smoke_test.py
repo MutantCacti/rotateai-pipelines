@@ -104,15 +104,15 @@ def main():
 
     surface_args = ['--strategy', 'start', '--surface-depth', '5', '--dive-depth', '10']
     # 60 samples breathing at the surface (prhpredict needs 50), then a dive:
-    # it emits on the sample that crosses dive depth. --min-aniso 0 so the
-    # synthetic surfacing cannot be rejected.
+    # it emits on the sample that crosses dive depth. Both gates off so the
+    # synthetic surfacing, at constant depth, cannot be rejected.
     prh_depths = [0.0] * 60 + [20.0 + 0.1 * i for i in range(100)]
 
     cases = [
         ('baseline', [], [0.0] * 20, channels, n_out, exactly(list(range(20)))),
         ('variable', ['--offset', '10'], [0.0] * 20, channels, n_out, exactly([0, 10])),
         ('surface', surface_args, [0.0] * window, channels, n_out, exactly([window - 1])),
-        ('prhpredict', ['--min-aniso', '0'], prh_depths, PRH_CHANNELS, PRH_OUTPUT,
+        ('prhpredict', ['--min-aniso', '0', '--min-branch-conf', '0'], prh_depths, PRH_CHANNELS, PRH_OUTPUT,
          exactly([60])),
     ]
 

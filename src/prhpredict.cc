@@ -9,7 +9,7 @@
  * Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]
  *                   [--heading-depth M] [--emit-depth M] [--min-breath N]
  *                   [--block-samples N] [--log-blocks N] [--heading-blocks N]
- *                   [--refresh-samples N] [--min-aniso X]
+ *                   [--refresh-samples N] [--min-aniso X] [--min-branch-conf X]
  *
  * Compile-time switches, all off by default:
  *   -DSINGLE_PRECISION  all arithmetic in float instead of double
@@ -74,6 +74,8 @@ static int HEADING_BLOCKS = 0;
 
 
 static real MIN_ANISO = R(0.6);
+// |corr| per heading sample: how clearly depth rate picks the 180 deg branch.
+static real MIN_BRANCH_CONF = R(0.003);
 
 
 enum { ST_DIVE = 0, ST_SHALLOW, ST_BREATH };
@@ -204,7 +206,7 @@ static int emit(State *s)
 
     const real aniso = contrast(Sxx, Syy, Sxy);
     if (aniso < MIN_ANISO) {
-        TRACE("reject idx=%zu surface aniso=%.4f n_log=%u n_head=%d\n",
+        TRACE("reject idx=%zu surface cause=aniso aniso=%.4f n_log=%u n_head=%d\n",
               s->sample_idx, (double)aniso, lw.n_log, hw.head.n);
         return 0;
     }
@@ -212,17 +214,27 @@ static int emit(State *s)
     real corr;
     const real h0 = resolve_branch(solve_h(Sxx, Syy, Sxy), Q, hw.head.D, &corr);
 
+    // Normalised, so the gate does not depend on the segment's length.
+    const real conf = std::fabs(corr) / R(hw.head.n);
+    if (conf < MIN_BRANCH_CONF) {
+        TRACE("reject idx=%zu surface cause=branch conf=%.5f aniso=%.4f n_log=%u n_head=%d\n",
+              s->sample_idx, (double)conf, (double)aniso, lw.n_log, hw.head.n);
+        return 0;
+    }
+
     const float out[N_OUTPUT] = { (float)p0, (float)r0, (float)h0 };
     write_output(out, N_OUTPUT);
     STAT(s->n_write++);
-    TRACE("emit idx=%zu surface p=%.1f r=%.1f h=%.1f aniso=%.4f n_log=%u n_head=%d corr=%+.3f\n",
+    TRACE("emit idx=%zu surface p=%.1f r=%.1f h=%.1f aniso=%.4f n_log=%u n_head=%d corr=%+.3f "
+          "conf=%.5f\n",
           s->sample_idx, (double)(p0 * R(180) / PI), (double)(r0 * R(180) / PI),
-          (double)(h0 * R(180) / PI), (double)aniso, lw.n_log, hw.head.n, (double)corr);
+          (double)(h0 * R(180) / PI), (double)aniso, lw.n_log, hw.head.n, (double)corr,
+          (double)conf);
     return 1;
 }
 
 
-static char defaults[256];
+static char defaults[384];
 
 
 static void usage(void)
@@ -231,7 +243,7 @@ static void usage(void)
         "Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]\n"
         "                  [--heading-depth M] [--emit-depth M] [--min-breath N]\n"
         "                  [--block-samples N] [--log-blocks N] [--heading-blocks N]\n"
-        "                  [--refresh-samples N] [--min-aniso X]\n"
+        "                  [--refresh-samples N] [--min-aniso X] [--min-branch-conf X]\n"
         "Defaults: %s\n", defaults);
 }
 
@@ -241,10 +253,11 @@ int main(int argc, const char *argv[])
     snprintf(defaults, sizeof(defaults),
              "surface %g m, breath %g m, dive %g m, heading = breath depth, "
              "emit = dive depth, min-breath %d, block-samples %d, log-blocks %d, "
-             "heading-blocks %d (0: whole surfacing), refresh-samples %d, min-aniso %g",
+             "heading-blocks %d (0: whole surfacing), refresh-samples %d, min-aniso %g, "
+             "min-branch-conf %g",
              (double)SURFACE_DEPTH, (double)BREATH_DEPTH, (double)DIVE_DEPTH,
              MIN_BREATH, BLOCK_SAMPLES, LOG_BLOCKS, HEADING_BLOCKS, REFRESH_SAMPLES,
-             (double)MIN_ANISO);
+             (double)MIN_ANISO, (double)MIN_BRANCH_CONF);
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -260,6 +273,7 @@ int main(int argc, const char *argv[])
         else if (has && !strcmp(a, "--heading-blocks"))  HEADING_BLOCKS  = atoi(argv[++i]);
         else if (has && !strcmp(a, "--refresh-samples")) REFRESH_SAMPLES = atoi(argv[++i]);
         else if (has && !strcmp(a, "--min-aniso"))       MIN_ANISO       = R(atof(argv[++i]));
+        else if (has && !strcmp(a, "--min-branch-conf")) MIN_BRANCH_CONF = R(atof(argv[++i]));
         else { usage(); return 1; }
     }
     if (HEADING_DEPTH < 0.0f) HEADING_DEPTH = BREATH_DEPTH;
@@ -267,13 +281,13 @@ int main(int argc, const char *argv[])
     if (MIN_BREATH < 1 || BLOCK_SAMPLES < 1 || REFRESH_SAMPLES < 0 ||
         LOG_BLOCKS < 0 || LOG_BLOCKS > MAX_BLOCKS ||
         HEADING_BLOCKS < 0 || HEADING_BLOCKS > MAX_BLOCKS ||
-        MIN_ANISO < R(0) || MIN_ANISO > R(1) ||
+        MIN_ANISO < R(0) || MIN_ANISO > R(1) || MIN_BRANCH_CONF < R(0) ||
         !(BREATH_DEPTH < SURFACE_DEPTH && SURFACE_DEPTH < DIVE_DEPTH) ||
         HEADING_DEPTH <= 0.0f || EMIT_DEPTH < SURFACE_DEPTH) {
         usage();
         fprintf(stderr, "Need min-breath >= 1, block-samples >= 1, refresh-samples >= 0, "
                         "0 <= log-blocks and heading-blocks <= %d, 0 <= min-aniso <= 1, "
-                        "breath < surface < dive, heading-depth > 0, "
+                        "min-branch-conf >= 0, breath < surface < dive, heading-depth > 0, "
                         "emit-depth >= surface.\n", MAX_BLOCKS);
         return 1;
     }

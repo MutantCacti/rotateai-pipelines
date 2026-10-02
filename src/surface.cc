@@ -25,10 +25,12 @@
 
 #include "pipeline.h"
 
+
 static void print_usage()
 {
     fprintf(stderr, "Usage: surface --strategy STRAT --surface-depth DEPTH --dive-depth DEPTH [--min-samples INT] [--max-samples INT]\n");
 }
+
 
 // Run inference on window, return raw (cos, sin) pairs from the last prediction row.
 // Returns 0 on success, 1 on failure.
@@ -45,6 +47,7 @@ static int infer(Pipeline* p, float* window, int kInputSize, float* raw)
     return 0;
 }
 
+
 // Invoke model on current window, decode raw pairs to angles, and write output.
 static int infer_and_write(Pipeline* p, float* window, int kInputSize)
 {
@@ -57,6 +60,7 @@ static int infer_and_write(Pipeline* p, float* window, int kInputSize)
     return 0;
 }
 
+
 // Shift window left and insert sample at end.
 static void advance_window(float* window, float* sample, int kInputSize)
 {
@@ -66,11 +70,13 @@ static void advance_window(float* window, float* sample, int kInputSize)
            sizeof(float) * INPUT_CHANNELS);
 }
 
+
 // Surfacing ends on a dive, or on a forced refresh once max_samples is reached.
 static bool surfacing_ended(float depth, int dive_depth, int surface_count, int max_samples)
 {
     return depth > dive_depth || (max_samples > 0 && surface_count >= max_samples);
 }
+
 
 // Strategy: start - emit once the first WINDOW_SIZE surface samples are in.
 static int run_start(Pipeline* p, int surface_depth, int dive_depth, int max_samples)
@@ -119,6 +125,7 @@ static int run_start(Pipeline* p, int surface_depth, int dive_depth, int max_sam
     return 0;
 }
 
+
 // Strategy: end - keep advancing window until falling edge.
 static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_samples, int max_samples)
 {
@@ -163,6 +170,7 @@ static int run_end(Pipeline* p, int surface_depth, int dive_depth, int min_sampl
 
     return 0;
 }
+
 
 // Strategy: bookend - average of start and end windows, or the end window
 // alone when the surfacing period is too short to hold both.
@@ -233,6 +241,7 @@ static int run_bookend(Pipeline* p,
     return 0;
 }
 
+
 // Strategy: average - average of non-overlapping windows across surfacing period.
 // Accumulate raw (cos, sin) pairs, then atan2-decode at the end (circular mean).
 static int run_average(Pipeline* p,
@@ -302,6 +311,7 @@ static int run_average(Pipeline* p,
 
     return 0;
 }
+
 
 int main(int argc, const char *argv[])
 {

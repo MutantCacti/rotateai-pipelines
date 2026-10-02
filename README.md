@@ -1,12 +1,14 @@
 # RotateAI Pipelines
 
+[![build](https://github.com/mtmd1/rotateai-pipelines/actions/workflows/build.yml/badge.svg)](https://github.com/mtmd1/rotateai-pipelines/actions/workflows/build.yml)
+
 Inference pipelines for on-tag whale orientation correction. Designed for STM32U5 deployment, tested with [rotateai-simulator](https://github.com/mtmd1/rotateai-simulator).
 
 Each pipeline reads sensor data from stdin and writes corrected orientation angles to stdout using binary float32. They differ in when and how often inference runs.
 
 ## I/O shape
 
-- **Input** (per sample): 4 float32 — `ax, ay, az, p` (accelerometer xyz in g, depth in m). 16 bytes.
+- **Input** (per sample): `INPUT_CHANNELS` float32, set by the model in `build/models/model_params.h`, with depth last. A 4-channel model takes `ax, ay, az, p` (accelerometer xyz in g, depth in m, 16 bytes). The 7-channel model takes `ax, ay, az, mx, my, mz, p` (28 bytes). `prhpredict` has no model and always takes the 4-channel layout.
 - **Output** (per emitted prediction): 1 flag byte + 3 float32 — `pitch, roll, heading` in radians, in `(-π, π]`. 13 bytes when flag=`0x01`.
 - **Skip**: 1 flag byte `0x00`. No payload.
 
@@ -18,15 +20,17 @@ Models are HART-family Transformers ending in `L2NormalizeAngles`, which emits 6
 ./install.sh
 ```
 
-This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro). A Python environment is also required for model preparation:
+This clones and builds [TFLite Micro](https://github.com/tensorflow/tflite-micro) at the commit pinned in `install.sh`. It needs GNU make 3.82 or later (on macOS, `brew install make` and put its `gnubin` on `PATH`), `wget`, `unzip`, and a `python3` with `numpy` and `pillow`, which TFLM's Makefile uses while parsing. A Python environment is also required for model preparation:
 
 ```sh
 python -m venv .venv    # requires Python <= 3.13
 source .venv/bin/activate
-pip install tensorflow numpy
+pip install -r tools/requirements.txt
 ```
 
 The HART custom Keras layers are vendored under `tools/model/`; no external `PYTHONPATH` setup is needed.
+
+The versions in `tools/requirements.txt` are pinned because the converted model depends on them.
 
 ## Model Preparation
 
@@ -34,6 +38,12 @@ Converts a Keras model (and optional preprocessing parameters) into C-compatible
 
 ```sh
 source .venv/bin/activate
+make models
+```
+
+This converts the vendored model in `models/`. For any other model:
+
+```sh
 python tools/prepare_model.py --model /path/to/model.keras [--params /path/to/params.pkl]
 ```
 
@@ -49,7 +59,26 @@ Generated files (default: `build/models/`):
 make baseline
 make variable
 make surface
+make prhpredict
 ```
+
+`prhpredict` has no model, so it needs neither TFLite Micro nor model preparation — just a C++ compiler.
+
+Builds are supported on x86-64 Linux, macOS (Intel) and Windows (MSYS2 UCRT64). Linux binaries link libstdc++ and libgcc statically, and Windows binaries are fully static.
+
+### Prebuilt binaries
+
+CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embedded on all platforms.
+
+Each zip holds the four binaries and the `model_params.h` they were built with, which gives `INPUT_CHANNELS` and `WINDOW_SIZE`. With a checkout of this repo, `python3 tools/smoke_test.py <unzipped dir>` checks them. The Linux binaries are built in a `manylinux_2_28` container, so they run on any distribution with glibc 2.28 or later. Binaries you build yourself need the glibc of the machine that built them.
+
+On macOS the binaries are ad-hoc signed. Clear the quarantine flag before running:
+
+```sh
+xattr -d com.apple.quarantine baseline variable surface prhpredict
+```
+
+Outputs are not bit-identical across operating systems.
 
 ## Current Pipelines
 
@@ -58,6 +87,7 @@ make surface
 | `baseline` | Every sample | Maximum accuracy and cost. |
 | `variable` | Every X samples | Measures a sample window periodically. |
 | `surface`  | Event-triggered | Detects surfacing periods and runs inference on them. |
+| `prhpredict` | Event-triggered, no model | Mark Johnson's prhpredictor, from surfacings alone. Pitch and roll from the mean acceleration while breathing at the surface (method 1), heading from the surfacing's plane of motion (method 2's constraint). Emits as the animal leaves the surface, and every 12 min during a surfacing that long. |
 
 The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly. `start` emits as soon as its window fills rather than waiting for the dive, so `--min-samples` is fixed at the window size for that strategy. `bookend` falls back to the end window alone when the surfacing period is shorter than two windows.
 

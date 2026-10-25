@@ -55,10 +55,15 @@ build/surface$(EXE): src/surface.cc src/pipeline.h src/protocol.h $(GEN_DIR)/mod
 # -ffp-contract=off stops compilers fusing multiply-adds (arm64 ones do by
 # default). Output is still not bit identical across OSes: each libm can
 # differ in the last bit of sin/cos/atan2, so compare with a tolerance
-prhpredict: build/prhpredict$(EXE)
-build/prhpredict$(EXE): src/prhpredict.cc src/prh.h src/protocol.h
+prhsurface: build/prhsurface$(EXE)
+build/prhsurface$(EXE): src/prhsurface.cc src/prh.h src/protocol.h
 	@mkdir -p build
-	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhpredict.cc -o $@ $(LDFLAGS)
+	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhsurface.cc -o $@ $(LDFLAGS)
+
+prhedge: build/prhedge$(EXE)
+build/prhedge$(EXE): src/prhedge.cc src/prh.h src/protocol.h
+	@mkdir -p build
+	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhedge.cc -o $@ $(LDFLAGS)
 
 
 
@@ -77,5 +82,5 @@ clean:
 	rm -rf build/
 
 
-.PHONY: baseline variable surface prhpredict models clean
+.PHONY: baseline variable surface prhsurface prhedge models clean
 

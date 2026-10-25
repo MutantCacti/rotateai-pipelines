@@ -1,12 +1,12 @@
 /*
- * src/prhpredict.cc
+ * src/prhsurface.cc
  * Tag orientation with no model, from surfacings alone: p0 and r0 from the
  * logging mean (prhpredictor.m method 1, line 185), h0 from the surfacing's
  * plane of motion. With p0/r0 fixed, method 2's alignment of the plane normal
  * with y (lines 247-256) is method 1's lateral-energy solve (lines 191-201) on
  * the logging segment. Emits when the animal leaves the surface.
  *
- * Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]
+ * Usage: prhsurface [--surface-depth M] [--breath-depth M] [--dive-depth M]
  *                   [--heading-depth M] [--emit-depth M] [--min-breath N]
  *                   [--block-samples N] [--log-blocks N] [--heading-blocks N]
  *                   [--refresh-samples N] [--min-aniso X] [--min-branch-conf X]
@@ -137,7 +137,7 @@ static void add_to(Block *b, const float a[3], float depth, int log, int head)
 
 
 // One surfacing sample, into the whole-surfacing total and the ring. `log` is
-// ST_BREATH, as for prhpredict's logging segment; the heading segment takes the
+// ST_BREATH, as for prhedge's logging segment; the heading segment takes the
 // same samples unless --heading-depth differs from the breath depth.
 static void surfacing_sample(State *s, const float a[3], float depth, int log)
 {
@@ -240,7 +240,7 @@ static char defaults[384];
 static void usage(void)
 {
     fprintf(stderr,
-        "Usage: prhpredict [--surface-depth M] [--breath-depth M] [--dive-depth M]\n"
+        "Usage: prhsurface [--surface-depth M] [--breath-depth M] [--dive-depth M]\n"
         "                  [--heading-depth M] [--emit-depth M] [--min-breath N]\n"
         "                  [--block-samples N] [--log-blocks N] [--heading-blocks N]\n"
         "                  [--refresh-samples N] [--min-aniso X] [--min-branch-conf X]\n"

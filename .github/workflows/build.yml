@@ -133,12 +133,12 @@ jobs:
         if: steps.tflm.outputs.cache-hit != 'true'
         run: ./install.sh
 
-      - run: make baseline variable surface prhpredict
+      - run: make baseline variable surface prhsurface prhedge
 
       - name: Check glibc and runtime linkage
         if: matrix.os == 'linux'
         run: |
-          bins="build/baseline build/variable build/surface build/prhpredict"
+          bins="build/baseline build/variable build/surface build/prhsurface build/prhedge"
           objdump -p $bins | grep NEEDED | sort | uniq -c
           if objdump -p $bins | grep -E 'NEEDED.*(libstdc\+\+|libgcc_s)'; then
             echo "libstdc++ or libgcc is linked dynamically"; exit 1
@@ -153,8 +153,8 @@ jobs:
       - name: Ad-hoc sign
         if: matrix.os == 'macos'
         run: |
-          codesign -s - -f build/baseline build/variable build/surface build/prhpredict
-          codesign -v build/baseline build/variable build/surface build/prhpredict
+          codesign -s - -f build/baseline build/variable build/surface build/prhsurface build/prhedge
+          codesign -v build/baseline build/variable build/surface build/prhsurface build/prhedge
 
       - run: python3 tools/smoke_test.py build
 
@@ -164,7 +164,7 @@ jobs:
         run: |
           mkdir -p dist
           zip -j dist/rotateai-pipelines-${{ matrix.os }}-x86_64.zip \
-            build/baseline* build/variable* build/surface* build/prhpredict* \
+            build/baseline* build/variable* build/surface* build/prhsurface* build/prhedge* \
             build/models/model_params.h
 
       # archive: false uploads the zip as-is instead of zipping it again

@@ -27,7 +27,8 @@ from pathlib import Path
 # Little-endian bytes 0a 1a 0a 3f, about 0.54 g.
 TRAP = struct.unpack('<f', b'\x0a\x1a\x0a\x3f')[0]
 
-# prhpredict reads A + p and writes pitch, roll, heading regardless of the model
+# prhsurface and prhedge read A + p and write pitch, roll, heading regardless
+# of the model
 PRH_CHANNELS, PRH_OUTPUT = 4, 3
 
 
@@ -55,7 +56,7 @@ def binary(build_dir, name):
 
 def stream(depths, channels):
     '''Samples [ax ay az (mx my mz) p] packed as float32. The accelerometer
-    wobbles so prhpredict's surfacing scatter is not degenerate.'''
+    wobbles so prhsurface's and prhedge's scatter is not degenerate.'''
     out = bytearray()
     for i, depth in enumerate(depths):
         a = [TRAP, 0.3 * math.sin(i / 3), 0.8 + 0.1 * math.cos(i / 5)]
@@ -103,17 +104,42 @@ def main():
         return lambda got: None if got == want else f'emitted at {got}, expected {want}'
 
     surface_args = ['--strategy', 'start', '--surface-depth', '5', '--dive-depth', '10']
-    # 60 samples breathing at the surface (prhpredict needs 50), then a dive:
-    # it emits on the sample that crosses dive depth. --min-aniso 0 so the
-    # synthetic surfacing cannot be rejected.
+    # 60 samples breathing at the surface (prhsurface needs 50), then a dive:
+    # it emits on the sample that crosses dive depth. prhedge needs 25; the
+    # cases below pin its old behaviour (segment from 10 m, 100 samples,
+    # ascents on) and check the defaults separately. Gates off so the synthetic
+    # segments cannot be rejected.
     prh_depths = [0.0] * 60 + [20.0 + 0.1 * i for i in range(100)]
+    edge_off = ['--min-aniso', '0', '--min-aniso-up', '0', '--min-branch-conf', '0',
+                '--edge-depth', '10', '--dive-depth', '10', '--descent-samples', '100',
+                '--ascents']
+    # Defaults: the segment opens past 3 m (sample 60) and keeps 50 samples;
+    # the dive counts at 50.05 m, sample 154.
+    deep = [0.0] * 60 + [3.05 + 0.5 * i for i in range(150)]
+    gates_off = ['--min-aniso', '0', '--min-branch-conf', '0']
+    # A steady 0.5 m/s descent: 4.05 m at sample 70, 10.05 m at 130. The segment
+    # opens at dive depth by default, or at --edge-depth.
+    ramp = [0.0] * 60 + [3.05 + 0.1 * i for i in range(200)]
+    # A dive, an ascent (pending at 209), a breath, then a slow descent whose
+    # edge segment is full when it crosses dive depth at 410, where the ascent
+    # emits: the descent must wait a sample.
+    both = (prh_depths + [29.0 - 0.5 * i for i in range(50)] + [0.0] * 60 +
+            [3.05 + 0.05 * i for i in range(200)])
 
     cases = [
         ('baseline', [], [0.0] * 20, channels, n_out, exactly(list(range(20)))),
         ('variable', ['--offset', '10'], [0.0] * 20, channels, n_out, exactly([0, 10])),
         ('surface', surface_args, [0.0] * window, channels, n_out, exactly([window - 1])),
-        ('prhpredict', ['--min-aniso', '0'], prh_depths, PRH_CHANNELS, PRH_OUTPUT,
-         exactly([60])),
+        ('prhsurface', ['--min-aniso', '0', '--min-branch-conf', '0'], prh_depths,
+         PRH_CHANNELS, PRH_OUTPUT, exactly([60])),
+        ('prhedge', edge_off, prh_depths, PRH_CHANNELS, PRH_OUTPUT, exactly([159])),
+        ('prhedge', edge_off, ramp, PRH_CHANNELS, PRH_OUTPUT, exactly([229])),
+        ('prhedge', [*edge_off, '--edge-depth', '4'], ramp, PRH_CHANNELS, PRH_OUTPUT,
+         exactly([169])),
+        ('prhedge', gates_off, deep, PRH_CHANNELS, PRH_OUTPUT, exactly([154])),
+        ('prhedge', edge_off, both, PRH_CHANNELS, PRH_OUTPUT, exactly([159, 410])),
+        ('prhedge', [*edge_off, '--edge-depth', '4'], both, PRH_CHANNELS, PRH_OUTPUT,
+         exactly([159, 410, 411])),
     ]
 
     failed = 0

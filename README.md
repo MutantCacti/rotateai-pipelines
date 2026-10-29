@@ -8,7 +8,7 @@ Each pipeline reads sensor data from stdin and writes corrected orientation angl
 
 ## I/O shape
 
-- **Input** (per sample): `INPUT_CHANNELS` float32, set by the model in `build/models/model_params.h`, with depth last. A 4-channel model takes `ax, ay, az, p` (accelerometer xyz in g, depth in m, 16 bytes). The 7-channel model takes `ax, ay, az, mx, my, mz, p` (28 bytes). `prhpredict` has no model and always takes the 4-channel layout.
+- **Input** (per sample): `INPUT_CHANNELS` float32, set by the model in `build/models/model_params.h`, with depth last. A 4-channel model takes `ax, ay, az, p` (accelerometer xyz in g, depth in m, 16 bytes). The 7-channel model takes `ax, ay, az, mx, my, mz, p` (28 bytes). `prhsurface` and `prhedge` have no model and always take the 4-channel layout.
 - **Output** (per emitted prediction): 1 flag byte + 3 float32 — `pitch, roll, heading` in radians, in `(-π, π]`. 13 bytes when flag=`0x01`.
 - **Skip**: 1 flag byte `0x00`. No payload.
 
@@ -59,23 +59,24 @@ Generated files (default: `build/models/`):
 make baseline
 make variable
 make surface
-make prhpredict
+make prhsurface
+make prhedge
 ```
 
-`prhpredict` has no model, so it needs neither TFLite Micro nor model preparation — just a C++ compiler.
+`prhsurface` and `prhedge` have no model, so they need neither TFLite Micro nor model preparation — just a C++ compiler.
 
 Builds are supported on x86-64 Linux, macOS (Intel) and Windows (MSYS2 UCRT64). Linux binaries link libstdc++ and libgcc statically, and Windows binaries are fully static.
 
 ### Prebuilt binaries
 
-CI builds all four pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embedded on all platforms.
+CI builds all five pipelines on pushes to `main`, `v*` tags and PRs. Zips are attached to each run, and to GitHub Releases using a `v*` tag. Model conversion runs once on Linux and the same data is embedded on all platforms.
 
-Each zip holds the four binaries and the `model_params.h` they were built with, which gives `INPUT_CHANNELS` and `WINDOW_SIZE`. With a checkout of this repo, `python3 tools/smoke_test.py <unzipped dir>` checks them. The Linux binaries are built in a `manylinux_2_28` container, so they run on any distribution with glibc 2.28 or later. Binaries you build yourself need the glibc of the machine that built them.
+Each zip holds the five binaries and the `model_params.h` they were built with, which gives `INPUT_CHANNELS` and `WINDOW_SIZE`. With a checkout of this repo, `python3 tools/smoke_test.py <unzipped dir>` checks them. The Linux binaries are built in a `manylinux_2_28` container, so they run on any distribution with glibc 2.28 or later. Binaries you build yourself need the glibc of the machine that built them.
 
 On macOS the binaries are ad-hoc signed. Clear the quarantine flag before running:
 
 ```sh
-xattr -d com.apple.quarantine baseline variable surface prhpredict
+xattr -d com.apple.quarantine baseline variable surface prhsurface prhedge
 ```
 
 Outputs are not bit-identical across operating systems.
@@ -87,7 +88,8 @@ Outputs are not bit-identical across operating systems.
 | `baseline` | Every sample | Maximum accuracy and cost. |
 | `variable` | Every X samples | Measures a sample window periodically. |
 | `surface`  | Event-triggered | Detects surfacing periods and runs inference on them. |
-| `prhpredict` | Event-triggered, no model | Mark Johnson's prhpredictor, from surfacings alone. Pitch and roll from the mean acceleration while breathing at the surface (method 1), heading from the surfacing's plane of motion (method 2's constraint). Emits as the animal leaves the surface, and every 12 min during a surfacing that long. |
+| `prhsurface` | Event-triggered, no model | Mark Johnson's prhpredictor, from surfacings alone. Pitch and roll from the mean acceleration while breathing at the surface (method 1), heading from the surfacing's plane of motion (method 2's constraint). Emits as the animal leaves the surface, and every 12 min during a surfacing that long. |
+| `prhedge` | Event-triggered, no model | Mark Johnson's prhpredictor method 1, at each dive edge. Pitch and roll from the mean acceleration while breathing at the surface, heading from the plane of motion of the first 10 s after leaving the surface, on dives past 50 m. Emits as each such dive passes 50 m. |
 
 The `surface` binary supports four strategies (`start` / `end` / `bookend` / `average`); `bookend` and `average` average the raw `(cos, sin)` pairs across windows before decoding (circular mean) so wrap-around at ±π is handled correctly. `start` emits as soon as its window fills rather than waiting for the dive, so `--min-samples` is fixed at the window size for that strategy. `bookend` falls back to the end window alone when the surfacing period is shorter than two windows.
 

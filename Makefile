@@ -56,7 +56,7 @@ build/surface$(EXE): src/surface.cc src/pipeline.h src/protocol.h $(GEN_DIR)/mod
 # default). Output is still not bit identical across OSes: each libm can
 # differ in the last bit of sin/cos/atan2, so compare with a tolerance
 prhsurface: build/prhsurface$(EXE)
-build/prhsurface$(EXE): src/prhsurface.cc src/prh.h src/protocol.h
+build/prhsurface$(EXE): src/prhsurface.cc src/prhsurface.h src/prh.h src/protocol.h
 	@mkdir -p build
 	$(CXX) -std=c++17 -O2 -ffp-contract=off -Isrc src/prhsurface.cc -o $@ $(LDFLAGS)
 
